@@ -1,0 +1,17 @@
+<service>
+  <id>MVDInsightsEdgeAgent</id>
+  <name>MVD Insights Edge Agent</name>
+  <description>Connects local devices to the MVD Insights Event &amp; Automation Platform.</description>
+  <executable>%BASE%\mvd-edge-agent.exe</executable>
+  <workingdirectory>%BASE%</workingdirectory>
+  <startmode>Automatic</startmode>
+  <env name="MVD_EDGE_CONFIG" value="%ProgramData%\MVD Insights\Edge Agent\edge.env" />
+  <env name="EDGE_DATA_DIR" value="%ProgramData%\MVD Insights\Edge Agent\data" />
+  <env name="EDGE_LOG_DIR" value="%ProgramData%\MVD Insights\Edge Agent\logs" />
+  <onfailure action="restart" delay="10 sec" />
+  <logpath>%ProgramData%\MVD Insights\Edge Agent\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

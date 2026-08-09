@@ -1,67 +1,55 @@
-import serial
-import time
+import argparse
 
-PORT = "/dev/cu.usbserial-2120"
-BAUD = 57600
+from mvd_edge.discovery.serial import discover_reader_port
 
 
-def crc16_mcrf4xx(data):
-    crc = 0xFFFF
+def format_hex(value):
+    if value is None:
+        return "n/a"
 
-    for b in data:
-        crc ^= b
-
-        for _ in range(8):
-            if crc & 1:
-                crc = (crc >> 1) ^ 0x8408
-            else:
-                crc >>= 1
-
-    return crc & 0xFFFF
+    return f"0x{value:04X}"
 
 
-def make_command(address, command):
-    body = bytes([
-        0x04,
-        address,
-        command
-    ])
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Safely scan serial ports for an IDT-85 compatible reader."
+    )
+    parser.add_argument("--baud", default=57600, type=int)
+    args = parser.parse_args()
 
-    crc = crc16_mcrf4xx(body)
+    print("Scanning serial ports...")
+    print("Baud:", args.baud)
+    print()
 
-    return body + bytes([
-        crc & 0xFF,
-        (crc >> 8) & 0xFF
-    ])
+    result = discover_reader_port(baudrate=args.baud)
+
+    if not result.devices:
+        print("No serial ports reported by pyserial.")
+        return
+
+    for device in result.devices:
+        print(device.port)
+        print("Description:", device.description or "n/a")
+        print("Manufacturer:", device.manufacturer or "n/a")
+        print("VID:", format_hex(device.vid))
+        print("PID:", format_hex(device.pid))
+        print("Serial Number:", device.serial_number or "n/a")
+
+        if device.reader_verified:
+            print("IDT-85 compatible reader detected")
+        else:
+            print("No supported reader response")
+
+            if device.error:
+                print("Error:", device.error)
+
+        print()
+
+    if result.selected_port:
+        print("Selected:", result.selected_port)
+    else:
+        print(result.message)
 
 
-ser = serial.Serial(
-    port=PORT,
-    baudrate=BAUD,
-    bytesize=serial.EIGHTBITS,
-    parity=serial.PARITY_NONE,
-    stopbits=serial.STOPBITS_ONE,
-    timeout=2
-)
-
-cmd = make_command(0xFF, 0x21)
-
-print("Port:", PORT)
-print("Baud:", BAUD)
-print("TX HEX:", cmd.hex(" ").upper())
-
-ser.reset_input_buffer()
-ser.write(cmd)
-ser.flush()
-
-time.sleep(0.5)
-
-response = ser.read(256)
-
-if response:
-    print("RX HEX:", response.hex(" ").upper())
-    print("RX LEN:", len(response))
-else:
-    print("NO RESPONSE")
-
-ser.close()
+if __name__ == "__main__":
+    main()

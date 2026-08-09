@@ -5,8 +5,19 @@ import serial
 
 
 INVENTORY_COMMAND = 0x01
+GET_READER_INFO_COMMAND = 0x21
 GET_WORK_MODE_COMMAND = 0x36
 SET_WORK_MODE_COMMAND = 0x35
+ANSWER_MODE = 0x00
+SCAN_MODE = 0x01
+ANSWER_MODE_PARAMS = bytes([
+    0x00,
+    0x00,
+    0x05,
+    0x00,
+    0x01,
+    0x00,
+])
 
 
 def crc16(data: bytes) -> int:
@@ -34,6 +45,52 @@ def make_command(address: int, command: int, params: bytes = b"") -> bytes:
 
 def build_inventory_command(address: int = 0x00) -> bytes:
     return make_command(address=address, command=INVENTORY_COMMAND)
+
+
+def build_get_reader_info_command(address: int = 0xFF) -> bytes:
+    return make_command(address=address, command=GET_READER_INFO_COMMAND)
+
+
+def build_get_work_mode_command(address: int = 0x00) -> bytes:
+    return make_command(address=address, command=GET_WORK_MODE_COMMAND)
+
+
+def build_set_answer_mode_command(address: int = 0x00) -> bytes:
+    return make_command(
+        address=address,
+        command=SET_WORK_MODE_COMMAND,
+        params=ANSWER_MODE_PARAMS,
+    )
+
+
+def is_valid_command_response(response: bytes, command: int) -> bool:
+    if len(response) < 5:
+        return False
+
+    return response[2] == command
+
+
+def parse_work_mode_response(response: bytes) -> Optional[int]:
+    if not is_valid_command_response(response, GET_WORK_MODE_COMMAND):
+        return None
+
+    if len(response) < 5:
+        return None
+
+    return response[4]
+
+
+def format_work_mode(mode: Optional[int]) -> str:
+    if mode == ANSWER_MODE:
+        return "ANSWER"
+
+    if mode == SCAN_MODE:
+        return "SCAN"
+
+    if mode is None:
+        return "UNKNOWN"
+
+    return f"UNKNOWN({mode:#04x})"
 
 
 def parse_inventory_response(response: bytes) -> list[str]:
@@ -86,6 +143,17 @@ class IDT85Reader:
         self.read_size = read_size
         self._serial: Optional[serial.Serial] = None
         self._inventory_command = build_inventory_command(address=address)
+        self._reader_info_command = build_get_reader_info_command()
+        self._get_work_mode_command = build_get_work_mode_command(address=address)
+        self._set_answer_mode_command = build_set_answer_mode_command(address=address)
+
+    def apply_installation_profile(
+        self,
+        target_read_distance_m: Optional[float] = None,
+    ) -> None:
+        # Placeholder for future verified RF tuning. Intentionally sends no
+        # reader commands until hardware-specific calibration is validated.
+        _ = target_read_distance_m
 
     def open(self) -> None:
         self._serial = serial.Serial(
@@ -100,16 +168,38 @@ class IDT85Reader:
     def close(self) -> None:
         if self._serial:
             self._serial.close()
+            self._serial = None
 
-    def inventory(self) -> list[str]:
+    def _send_command(self, command: bytes, read_delay: Optional[float] = None) -> bytes:
         if not self._serial:
             raise RuntimeError("Serial port is not open")
 
         self._serial.reset_input_buffer()
-        self._serial.write(self._inventory_command)
+        self._serial.write(command)
         self._serial.flush()
 
-        time.sleep(self.read_delay)
+        time.sleep(self.read_delay if read_delay is None else read_delay)
 
-        response = self._serial.read(self.read_size)
+        return self._serial.read(self.read_size)
+
+    def get_reader_info(self) -> bytes:
+        return self._send_command(self._reader_info_command)
+
+    def verify_reader(self) -> bool:
+        return is_valid_command_response(
+            self.get_reader_info(),
+            GET_READER_INFO_COMMAND,
+        )
+
+    def get_work_mode(self) -> Optional[int]:
+        return parse_work_mode_response(
+            self._send_command(self._get_work_mode_command)
+        )
+
+    def set_answer_mode(self) -> bool:
+        response = self._send_command(self._set_answer_mode_command)
+        return is_valid_command_response(response, SET_WORK_MODE_COMMAND)
+
+    def inventory(self) -> list[str]:
+        response = self._send_command(self._inventory_command)
         return parse_inventory_response(response)

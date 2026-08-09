@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import time
 from typing import Optional
+from uuid import uuid4
 
 
 def timestamp() -> str:
@@ -10,6 +11,7 @@ def timestamp() -> str:
 
 @dataclass(frozen=True)
 class DetectedEvent:
+    edge_event_id: str
     event_type: str
     epc: str
     edge_event_at: str
@@ -32,6 +34,7 @@ class PresenceState:
             if epc not in self.visible_tags:
                 events.append(
                     DetectedEvent(
+                        edge_event_id=str(uuid4()),
                         event_type="ENTER",
                         epc=epc,
                         edge_event_at=timestamp(),
@@ -46,6 +49,7 @@ class PresenceState:
             if observed_at - last_seen >= self.exit_timeout:
                 events.append(
                     DetectedEvent(
+                        edge_event_id=str(uuid4()),
                         event_type="EXIT",
                         epc=epc,
                         edge_event_at=timestamp(),

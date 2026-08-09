@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 
@@ -19,33 +20,29 @@ def format_ms(value: Any) -> str:
     return "n/a"
 
 
+@dataclass(frozen=True)
+class DeliveryResult:
+    success: bool
+    duplicate: bool = False
+    status: Optional[str] = None
+    event_id: Optional[str] = None
+    error: Optional[str] = None
+
+
 class CloudTransport:
     def __init__(
         self,
         api_url: str,
         api_key: Optional[str] = None,
+        heartbeat_url: Optional[str] = None,
         timeout_seconds: float = 5,
     ) -> None:
         self.api_url = api_url
         self.api_key = api_key
+        self.heartbeat_url = heartbeat_url
         self.timeout_seconds = timeout_seconds
 
-    def send_event(
-        self,
-        event_type: str,
-        epc: str,
-        reader_id: str,
-        edge_event_at: str,
-    ) -> None:
-        event = {
-            "event": event_type,
-            "epc": epc,
-            "reader_id": reader_id,
-            "timestamp": edge_event_at,
-            "edge_event_at": edge_event_at,
-            "edge_send_at": timestamp(),
-        }
-
+    def send_payload(self, event: dict[str, Any]) -> DeliveryResult:
         headers = {}
         if self.api_key:
             headers["x-rfid-ingest-api-key"] = self.api_key
@@ -62,13 +59,64 @@ class CloudTransport:
                 timeout=self.timeout_seconds,
             )
 
-            if response.status_code == 201:
-                self._print_success(response.json(), epc)
-            else:
-                print("CLOUD ERROR:", response.status_code, response.text)
+            if response.status_code != 201:
+                error = f"HTTP {response.status_code}: {response.text}"
+                print("CLOUD ERROR:", error)
+                return DeliveryResult(success=False, error=error)
+
+            result = response.json()
+            status = result.get("status")
+            success = status in ("stored", "already_stored")
+            duplicate = bool(result.get("duplicate")) or status == "already_stored"
+
+            if success:
+                self._print_success(result, event["epc"])
+                return DeliveryResult(
+                    success=True,
+                    duplicate=duplicate,
+                    status=status,
+                    event_id=result.get("event_id"),
+                )
+
+            error = f"Unexpected API status: {status}"
+            print("CLOUD ERROR:", error)
+            return DeliveryResult(success=False, status=status, error=error)
 
         except requests.RequestException as error:
             print("CLOUD CONNECTION ERROR:", error)
+            return DeliveryResult(success=False, error=str(error))
+
+    def send_heartbeat(self, heartbeat: dict[str, Any]) -> DeliveryResult:
+        if not self.heartbeat_url:
+            return DeliveryResult(success=False, error="Heartbeat URL is not configured")
+
+        headers = {}
+        if self.api_key:
+            headers["x-rfid-ingest-api-key"] = self.api_key
+
+        try:
+            response = requests.post(
+                self.heartbeat_url,
+                json=heartbeat,
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+
+            if response.status_code != 200:
+                return DeliveryResult(
+                    success=False,
+                    error=f"HTTP {response.status_code}: {response.text}",
+                )
+
+            result = response.json()
+            return DeliveryResult(
+                success=result.get("status") == "ok",
+                status=result.get("status"),
+                error=None if result.get("status") == "ok" else "Heartbeat failed",
+            )
+
+        except requests.RequestException as error:
+            return DeliveryResult(success=False, error=str(error))
 
     def _print_success(self, result: dict[str, Any], epc: str) -> None:
         print("CLOUD OK:", result.get("event_id"))

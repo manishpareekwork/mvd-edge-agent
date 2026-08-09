@@ -1,0 +1,24 @@
+[Unit]
+Description=MVD Insights Edge Agent
+Documentation=file:/opt/mvd-edge/docs/LINUX_SERVICE.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mvd-edge
+Group=mvd-edge
+WorkingDirectory=/opt/mvd-edge
+Environment=MVD_EDGE_CONFIG=/etc/mvd-edge/edge.env
+Environment=EDGE_DATA_DIR=/var/lib/mvd-edge
+Environment=EDGE_LOG_DIR=/var/log/mvd-edge
+ExecStart=/opt/mvd-edge/mvd-edge-agent
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

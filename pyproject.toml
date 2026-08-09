@@ -17,5 +17,10 @@ dependencies = [
 [project.scripts]
 mvd-edge-agent = "mvd_edge.app:main"
 
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6,<7",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

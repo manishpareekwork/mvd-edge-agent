@@ -1,8 +1,18 @@
 import unittest
 
 from mvd_edge.adapters.idt85 import (
+    ANSWER_MODE,
+    GET_READER_INFO_COMMAND,
+    GET_WORK_MODE_COMMAND,
+    SET_WORK_MODE_COMMAND,
     build_inventory_command,
+    build_get_reader_info_command,
+    build_get_work_mode_command,
+    build_set_answer_mode_command,
+    format_work_mode,
+    is_valid_command_response,
     parse_inventory_response,
+    parse_work_mode_response,
 )
 
 
@@ -12,6 +22,22 @@ class IDT85ParserTests(unittest.TestCase):
             build_inventory_command(address=0x00).hex(" ").upper(),
             "04 00 01 DB 4B",
         )
+
+    def test_build_reader_info_and_work_mode_commands(self) -> None:
+        self.assertEqual(build_get_reader_info_command()[2], GET_READER_INFO_COMMAND)
+        self.assertEqual(build_get_work_mode_command()[2], GET_WORK_MODE_COMMAND)
+        self.assertEqual(build_set_answer_mode_command()[2], SET_WORK_MODE_COMMAND)
+
+    def test_validates_reader_info_response_by_command(self) -> None:
+        response = bytes([0x05, 0xFF, GET_READER_INFO_COMMAND, 0x00, 0x00])
+
+        self.assertTrue(is_valid_command_response(response, GET_READER_INFO_COMMAND))
+
+    def test_parse_answer_work_mode_response(self) -> None:
+        response = bytes([0x06, 0x00, GET_WORK_MODE_COMMAND, 0x00, ANSWER_MODE, 0x00])
+
+        self.assertEqual(parse_work_mode_response(response), ANSWER_MODE)
+        self.assertEqual(format_work_mode(ANSWER_MODE), "ANSWER")
 
     def test_parse_single_tag_inventory_frame(self) -> None:
         frame = bytes([
