@@ -174,6 +174,28 @@ def process_pending_deliveries(
     return delivered_count
 
 
+def attempt_immediate_delivery(
+    *,
+    queue: EventQueue,
+    transport: CloudTransport,
+    batch_size: int,
+    health_state: HealthState,
+) -> float:
+    pending = queue.pending_count()
+
+    if pending:
+        print("QUEUE:", pending, "pending")
+
+    process_pending_deliveries(
+        queue=queue,
+        transport=transport,
+        batch_size=batch_size,
+        health_state=health_state,
+    )
+
+    return time.time()
+
+
 def connect_and_verify_reader(
     reader: IDT85Reader,
     auto_configure_reader: bool,
@@ -476,19 +498,21 @@ def run_agent(
                 print(event.event_type)
                 print("edge_event_id=", event.edge_event_id, sep="")
 
-            if time.time() - last_delivery_attempt >= config.queue_retry_interval:
-                pending = queue.pending_count()
-
-                if pending:
-                    print("QUEUE:", pending, "pending")
-
-                process_pending_deliveries(
+            if events:
+                last_delivery_attempt = attempt_immediate_delivery(
                     queue=queue,
                     transport=transport,
                     batch_size=config.queue_batch_size,
                     health_state=health_state,
                 )
-                last_delivery_attempt = time.time()
+
+            if time.time() - last_delivery_attempt >= config.queue_retry_interval:
+                last_delivery_attempt = attempt_immediate_delivery(
+                    queue=queue,
+                    transport=transport,
+                    batch_size=config.queue_batch_size,
+                    health_state=health_state,
+                )
 
             if time.time() - last_heartbeat_attempt >= config.heartbeat_interval:
                 send_heartbeat(

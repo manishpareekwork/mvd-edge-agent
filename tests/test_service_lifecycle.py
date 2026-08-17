@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from mvd_edge.app import ReaderState, ShutdownController, main, run_agent
 from mvd_edge.config import EdgeConfig
+from mvd_edge.event_engine.state import PresenceState
 from mvd_edge.transport.cloud import DeliveryResult
 
 
@@ -161,6 +162,46 @@ class ServiceLifecycleTests(unittest.TestCase):
                 )
 
         self.assertTrue(fake_queue.closed)
+
+    def test_new_event_triggers_immediate_queue_delivery_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch("builtins.print"):
+            controller = ShutdownController()
+            fake_queue = FakeQueue(Path(directory) / "events.sqlite3")
+            fake_reader = FakeReader("/dev/test-reader", 57600)
+            state = PresenceState(exit_timeout=3.0)
+            event = state.update(["EPC1"], now=100.0)[0]
+
+            def stop_after_heartbeat(**_kwargs):
+                controller.request_shutdown()
+                return DeliveryResult(success=True, status="ok")
+
+            with (
+                patch("mvd_edge.app.EventQueue", return_value=fake_queue),
+                patch("mvd_edge.app.CloudTransport"),
+                patch(
+                    "mvd_edge.app.resolve_reader_port",
+                    return_value=("/dev/test-reader", "ok", None),
+                ),
+                patch("mvd_edge.app.IDT85Reader", return_value=fake_reader),
+                patch(
+                    "mvd_edge.app.connect_and_verify_reader",
+                    return_value=(ReaderState.READY, "ok"),
+                ),
+                patch(
+                    "mvd_edge.app.read_inventory_events",
+                    return_value=(ReaderState.READY, [event], ""),
+                ),
+                patch("mvd_edge.app.process_pending_deliveries", return_value=0) as deliver,
+                patch("mvd_edge.app.send_heartbeat", side_effect=stop_after_heartbeat),
+            ):
+                run_agent(
+                    make_config(Path(directory), queue_retry_interval=60),
+                    shutdown_requested=controller.is_requested,
+                )
+
+        self.assertTrue(fake_queue.closed)
+        self.assertEqual(len(fake_queue.enqueued), 1)
+        self.assertEqual(deliver.call_count, 2)
 
     def test_sqlite_initialization_failure_is_fatal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
