@@ -21,6 +21,8 @@ def make_config(directory: Path, **overrides) -> EdgeConfig:
         "device_id": "EXP-CENTER-EDGE-01",
         "device_type": "IDT85",
         "reader_id": "LAB-RFID-01",
+        "reader_address": 0x00,
+        "reader_verify_method": "AUTO",
         "serial_port": "AUTO",
         "serial_baud": 57600,
         "rfid_api_url": "https://api.example.test/api/v1/rfid/events",
@@ -31,6 +33,7 @@ def make_config(directory: Path, **overrides) -> EdgeConfig:
         "queue_retry_interval": 60,
         "queue_batch_size": 20,
         "serial_reconnect_interval": 60,
+        "reader_discovery_interval": 60,
         "auto_configure_reader": False,
         "heartbeat_interval": 0,
         "heartbeat_api_url": "https://api.example.test/api/v1/edge/heartbeat",
@@ -60,9 +63,17 @@ class FakeQueue:
 
 
 class FakeReader:
-    def __init__(self, port: str, baudrate: int) -> None:
+    def __init__(
+        self,
+        port: str,
+        baudrate: int,
+        address: int = 0x00,
+        verify_method: str = "AUTO",
+    ) -> None:
         self.port = port
         self.baudrate = baudrate
+        self.address = address
+        self.verify_method = verify_method
         self.close_count = 0
 
     def close(self) -> None:
@@ -133,6 +144,72 @@ class ServiceLifecycleTests(unittest.TestCase):
                 )
 
         self.assertTrue(fake_queue.closed)
+
+    def test_reader_absent_then_appears_disconnects_and_reconnects_without_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch("builtins.print"):
+            controller = ShutdownController()
+            fake_queue = FakeQueue(Path(directory) / "events.sqlite3")
+            first_reader = FakeReader("/dev/ttyUSB0", 57600)
+            second_reader = FakeReader("/dev/ttyUSB0", 57600)
+            heartbeat_count = 0
+
+            def heartbeat_until_reconnected(**_kwargs):
+                nonlocal heartbeat_count
+                heartbeat_count += 1
+
+                if heartbeat_count >= 3:
+                    controller.request_shutdown()
+
+                return DeliveryResult(success=True, status="ok")
+
+            with (
+                patch("mvd_edge.app.EventQueue", return_value=fake_queue),
+                patch("mvd_edge.app.CloudTransport"),
+                patch(
+                    "mvd_edge.app.resolve_reader_port",
+                    side_effect=[
+                        (None, "reader not found", Mock(supported_readers=[])),
+                        ("/dev/ttyUSB0", "Reader selected", None),
+                        ("/dev/ttyUSB0", "Reader selected", None),
+                    ],
+                ) as resolve,
+                patch(
+                    "mvd_edge.app.IDT85Reader",
+                    side_effect=[first_reader, second_reader],
+                ) as reader_factory,
+                patch(
+                    "mvd_edge.app.connect_and_verify_reader",
+                    return_value=(ReaderState.READY, "ok"),
+                ) as connect,
+                patch(
+                    "mvd_edge.app.read_inventory_events",
+                    side_effect=[
+                        (ReaderState.DISCONNECTED, [], "lost serial"),
+                        (ReaderState.READY, [], ""),
+                    ],
+                ) as inventory,
+                patch("mvd_edge.app.process_pending_deliveries", return_value=0),
+                patch(
+                    "mvd_edge.app.send_heartbeat",
+                    side_effect=heartbeat_until_reconnected,
+                ),
+            ):
+                run_agent(
+                    make_config(
+                        Path(directory),
+                        scan_interval=0,
+                        reader_discovery_interval=0,
+                        heartbeat_interval=0,
+                    ),
+                    shutdown_requested=controller.is_requested,
+                )
+
+        self.assertEqual(resolve.call_count, 3)
+        self.assertEqual(reader_factory.call_count, 2)
+        self.assertEqual(connect.call_count, 2)
+        self.assertEqual(inventory.call_count, 2)
+        self.assertTrue(fake_queue.closed)
+        self.assertEqual(fake_queue.enqueued, [])
 
     def test_cloud_unavailable_is_recoverable_until_shutdown(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch("builtins.print"):
@@ -209,6 +286,12 @@ class ServiceLifecycleTests(unittest.TestCase):
             env_file.write_text(
                 "\n".join([
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=test-key",
+                    "SITE_ID=EXPERIENCE-CENTER",
+                    "LOCATION_ID=GATE-1",
+                    "ZONE_ID=INBOUND",
+                    "DEVICE_ID=EXP-CENTER-EDGE-01",
+                    "READER_ID=LAB-RFID-01",
                     f"EDGE_DATA_DIR={Path(directory) / 'data'}",
                 ])
             )
@@ -250,6 +333,7 @@ class ServiceTemplateTests(unittest.TestCase):
         self.assertIn("MVD_EDGE_CONFIG=/etc/mvd-edge/edge.env", service)
         self.assertIn("EDGE_DATA_DIR=/var/lib/mvd-edge", service)
         self.assertIn("EDGE_LOG_DIR=/var/log/mvd-edge", service)
+        self.assertIn("PYTHONUNBUFFERED=1", service)
         self.assertIn("Restart=on-failure", service)
         self.assertIn("User=mvd-edge", service)
 

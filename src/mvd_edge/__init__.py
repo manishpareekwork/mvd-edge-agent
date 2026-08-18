@@ -21,7 +21,10 @@ def _version_from_pyproject() -> str:
     return "0+unknown"
 
 
-try:
-    __version__ = metadata.version("mvd-insights-edge-agent")
-except metadata.PackageNotFoundError:
-    __version__ = _version_from_pyproject()
+__version__ = _version_from_pyproject()
+
+if __version__ == "0+unknown":
+    try:
+        __version__ = metadata.version("mvd-insights-edge-agent")
+    except metadata.PackageNotFoundError:
+        pass

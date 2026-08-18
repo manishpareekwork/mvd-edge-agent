@@ -3,6 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from mvd_edge.adapters.idt85 import (
+    GET_WORK_MODE_COMMAND,
+    INVENTORY_COMMAND,
+    IDT85Reader,
+)
 from mvd_edge.app import resolve_reader_port
 from mvd_edge.config import EdgeConfig
 from mvd_edge.discovery.serial import discover_reader_port, probe_reader_port
@@ -30,9 +35,11 @@ class FakeReader:
     verified_ports = set()
     calls = []
 
-    def __init__(self, port, baudrate):
+    def __init__(self, port, baudrate, address=0x00, verify_method="AUTO"):
         self.port = port
         self.baudrate = baudrate
+        self.address = address
+        self.verify_method = verify_method
         self.closed = False
 
     def open(self):
@@ -59,6 +66,56 @@ class FakeReader:
         return False
 
 
+class ProtocolSerial:
+    responses_by_port = {}
+    writes_by_port = {}
+
+    def __init__(
+        self,
+        *,
+        port,
+        baudrate,
+        bytesize,
+        parity,
+        stopbits,
+        timeout,
+    ):
+        self.port = port
+        self.responses = list(self.responses_by_port.get(port, []))
+        self.writes_by_port.setdefault(port, [])
+
+    def reset_input_buffer(self):
+        pass
+
+    def write(self, command):
+        self.writes_by_port[self.port].append(command)
+
+    def flush(self):
+        pass
+
+    def read(self, size):
+        if not self.responses:
+            return b""
+
+        current = self.responses[0]
+        response = current[:size]
+        current = current[size:]
+
+        if current:
+            self.responses[0] = current
+        else:
+            self.responses.pop(0)
+
+        return response
+
+    def close(self):
+        pass
+
+
+def response_for(command):
+    return bytes([0x05, 0x00, command, 0x00, 0x00])
+
+
 def config(serial_port="AUTO", target_read_distance_m=None):
     return EdgeConfig(
         application_profile="RFID_ASSET_TRACKING",
@@ -68,6 +125,8 @@ def config(serial_port="AUTO", target_read_distance_m=None):
         device_id="EXP-CENTER-EDGE-01",
         device_type="IDT85",
         reader_id="LAB-RFID-01",
+        reader_address=0x00,
+        reader_verify_method="AUTO",
         serial_port=serial_port,
         serial_baud=57600,
         rfid_api_url="https://api.example.test/api/v1/rfid/events",
@@ -78,6 +137,7 @@ def config(serial_port="AUTO", target_read_distance_m=None):
         queue_retry_interval=5,
         queue_batch_size=20,
         serial_reconnect_interval=5,
+        reader_discovery_interval=5,
         auto_configure_reader=False,
         heartbeat_interval=30,
         heartbeat_api_url="https://api.example.test/api/v1/edge/heartbeat",
@@ -90,11 +150,24 @@ class SerialDiscoveryTests(unittest.TestCase):
     def setUp(self):
         FakeReader.verified_ports = set()
         FakeReader.calls = []
+        ProtocolSerial.responses_by_port = {}
+        ProtocolSerial.writes_by_port = {}
 
     def test_explicit_serial_port_bypasses_discovery(self):
         selected_port, message, result = resolve_reader_port(config(serial_port="COM4"))
 
         self.assertEqual(selected_port, "COM4")
+        self.assertEqual(message, "Using configured serial port")
+        self.assertIsNone(result)
+
+    def test_explicit_compulab_native_rs485_path_bypasses_discovery(self):
+        serial_path = "/run/iotdin-imx8p/gateway/access/industrial_io/ttyRS485"
+
+        selected_port, message, result = resolve_reader_port(
+            config(serial_port=serial_path)
+        )
+
+        self.assertEqual(selected_port, serial_path)
         self.assertEqual(message, "Using configured serial port")
         self.assertIsNone(result)
 
@@ -112,6 +185,35 @@ class SerialDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(result.selected_port, "/dev/ttyUSB0")
         self.assertEqual(len(result.supported_readers), 1)
+
+    def test_auto_selects_reader_verified_by_work_mode_fallback(self):
+        ProtocolSerial.responses_by_port = {
+            "/dev/ttyACM0": [
+                response_for(INVENTORY_COMMAND),
+                b"",
+            ],
+            "/dev/ttyUSB0": [
+                response_for(INVENTORY_COMMAND),
+                response_for(GET_WORK_MODE_COMMAND),
+            ],
+        }
+
+        with patch("mvd_edge.adapters.idt85.serial.Serial", ProtocolSerial):
+            result = discover_reader_port(
+                baudrate=57600,
+                port_infos=[
+                    FakePort("/dev/ttyACM0", description="Other USB Serial"),
+                    FakePort("/dev/ttyUSB0", description="CP210x USB Serial"),
+                ],
+                reader_factory=IDT85Reader,
+            )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB0")
+        self.assertEqual(len(result.supported_readers), 1)
+        self.assertNotIn(
+            bytes([0x04, 0x00, INVENTORY_COMMAND, 0xDB, 0x4B]),
+            ProtocolSerial.writes_by_port["/dev/ttyUSB0"],
+        )
 
     def test_auto_with_zero_readers_returns_no_match(self):
         result = discover_reader_port(
@@ -215,6 +317,7 @@ class ConfigCommissioningTests(unittest.TestCase):
             env_file.write_text(
                 "\n".join([
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=test-key",
                     "APPLICATION_PROFILE=RFID_ASSET_TRACKING",
                     "SITE_ID=EXPERIENCE-CENTER",
                     "LOCATION_ID=GATE-1",
@@ -241,6 +344,12 @@ class ConfigCommissioningTests(unittest.TestCase):
             env_file.write_text(
                 "\n".join([
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=test-key",
+                    "SITE_ID=EXPERIENCE-CENTER",
+                    "LOCATION_ID=GATE-1",
+                    "ZONE_ID=INBOUND",
+                    "DEVICE_ID=EXP-CENTER-EDGE-01",
+                    "READER_ID=LAB-RFID-01",
                     "TARGET_READ_DISTANCE_M=0",
                 ])
             )

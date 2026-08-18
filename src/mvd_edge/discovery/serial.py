@@ -69,9 +69,16 @@ def _rank_key(port_info: object) -> tuple[int, str]:
 def probe_reader_port(
     port: str,
     baudrate: int,
+    reader_address: int = 0x00,
+    reader_verify_method: str = "AUTO",
     reader_factory: Callable[..., IDT85Reader] = IDT85Reader,
 ) -> tuple[bool, Optional[str]]:
-    reader = reader_factory(port=port, baudrate=baudrate)
+    reader = reader_factory(
+        port=port,
+        baudrate=baudrate,
+        address=reader_address,
+        verify_method=reader_verify_method,
+    )
 
     try:
         reader.open()
@@ -84,6 +91,8 @@ def probe_reader_port(
 
 def discover_reader_port(
     baudrate: int,
+    reader_address: int = 0x00,
+    reader_verify_method: str = "AUTO",
     port_infos: Optional[list[object]] = None,
     reader_factory: Callable[..., IDT85Reader] = IDT85Reader,
 ) -> DiscoveryResult:
@@ -98,6 +107,8 @@ def discover_reader_port(
         verified, error = probe_reader_port(
             port=str(metadata["port"]),
             baudrate=baudrate,
+            reader_address=reader_address,
+            reader_verify_method=reader_verify_method,
             reader_factory=reader_factory,
         )
         devices.append(

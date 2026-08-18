@@ -75,12 +75,13 @@ QUEUE_RETRY_INTERVAL=5
 QUEUE_BATCH_SIZE=20
 SERIAL_RECONNECT_INTERVAL=5
 AUTO_CONFIGURE_READER=false
-DEVICE_ID=EXP-CENTER-EDGE-01
 HEARTBEAT_INTERVAL=30
 APPLICATION_PROFILE=RFID_ASSET_TRACKING
-SITE_ID=EXPERIENCE-CENTER
-LOCATION_ID=GATE-1
-ZONE_ID=INBOUND
+SITE_ID=
+LOCATION_ID=
+ZONE_ID=
+DEVICE_ID=
+READER_ID=
 TARGET_READ_DISTANCE_M=
 ```
 
@@ -91,8 +92,10 @@ That directory is ignored by Git.
 
 Packaging foundation lives in `docs/PACKAGING.md`. The current build target is a
 PyInstaller one-folder distribution named `mvd-edge-agent`, with external
-configuration and runtime data. Windows, Linux x64, and Linux ARM64 artifacts
-must each be built and tested on their target platform.
+configuration and runtime data. Linux installation copies the complete onedir
+runtime while preserving `/opt/mvd-edge/mvd-edge-agent` as the service
+executable. Windows, Linux x64, and Linux ARM64 artifacts must each be built and
+tested on their target platform.
 
 Service foundation docs:
 
@@ -107,7 +110,7 @@ docs/WINDOWS_SERVICE.md
 - Baud: 57600
 - Reader address: 0x00
 - Work mode: Answer Mode
-- Serial default: `/dev/cu.usbserial-2120`
+- Serial default: `AUTO`
 
 ## Protocol
 

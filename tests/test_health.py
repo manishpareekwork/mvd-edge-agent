@@ -40,7 +40,12 @@ class HealthTests(unittest.TestCase):
             env_file.write_text(
                 "\n".join([
                     "DEVICE_ID=EXP-CENTER-EDGE-99",
+                    "READER_ID=LAB-RFID-01",
+                    "SITE_ID=EXPERIENCE-CENTER",
+                    "LOCATION_ID=GATE-1",
+                    "ZONE_ID=INBOUND",
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=test-key",
                 ])
             )
 
@@ -62,6 +67,8 @@ class HealthTests(unittest.TestCase):
                 device_id="EXP-CENTER-EDGE-01",
                 device_type="IDT85",
                 reader_id="LAB-RFID-01",
+                reader_address=0x00,
+                reader_verify_method="AUTO",
                 serial_port="/dev/test-reader",
                 serial_baud=57600,
                 rfid_api_url="https://api.example.test/api/v1/rfid/events",
@@ -72,6 +79,7 @@ class HealthTests(unittest.TestCase):
                 queue_retry_interval=5,
                 queue_batch_size=20,
                 serial_reconnect_interval=5,
+                reader_discovery_interval=5,
                 auto_configure_reader=False,
                 heartbeat_interval=30,
                 heartbeat_api_url="https://api.example.test/api/v1/edge/heartbeat",
@@ -132,6 +140,8 @@ class HealthTests(unittest.TestCase):
                 device_id="EXP-CENTER-EDGE-01",
                 device_type="IDT85",
                 reader_id="LAB-RFID-01",
+                reader_address=0x00,
+                reader_verify_method="AUTO",
                 serial_port="/dev/test-reader",
                 serial_baud=57600,
                 rfid_api_url="https://api.example.test/api/v1/rfid/events",
@@ -142,6 +152,7 @@ class HealthTests(unittest.TestCase):
                 queue_retry_interval=5,
                 queue_batch_size=20,
                 serial_reconnect_interval=5,
+                reader_discovery_interval=5,
                 auto_configure_reader=False,
                 heartbeat_interval=30,
                 heartbeat_api_url="https://api.example.test/api/v1/edge/heartbeat",

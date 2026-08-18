@@ -1,8 +1,6 @@
+import argparse
 import serial
 import time
-
-PORT = "/dev/cu.usbserial-2120"
-BAUD = 57600
 
 
 def crc16(data):
@@ -35,33 +33,50 @@ def make_command(address, command):
     ])
 
 
-ser = serial.Serial(
-    PORT,
-    BAUD,
-    bytesize=8,
-    parity="N",
-    stopbits=1,
-    timeout=2
-)
+def build_parser():
+    parser = argparse.ArgumentParser(description="Read IDT-85 work mode.")
+    parser.add_argument("--port", required=True, help="Serial port path.")
+    parser.add_argument("--baud", type=int, default=57600, help="Serial baud rate.")
+    return parser
 
-cmd = make_command(0x00, 0x36)
 
-print("Get Work Mode")
-print("-------------")
-print("TX HEX:", cmd.hex(" ").upper())
+def main():
+    args = build_parser().parse_args()
 
-ser.reset_input_buffer()
-ser.write(cmd)
-ser.flush()
+    ser = serial.Serial(
+        args.port,
+        args.baud,
+        bytesize=8,
+        parity="N",
+        stopbits=1,
+        timeout=2
+    )
 
-time.sleep(0.5)
+    try:
+        cmd = make_command(0x00, 0x36)
 
-response = ser.read(256)
+        print("Get Work Mode")
+        print("-------------")
+        print("Port:", args.port)
+        print("Baud:", args.baud)
+        print("TX HEX:", cmd.hex(" ").upper())
 
-if response:
-    print("RX HEX:", response.hex(" ").upper())
-    print("RX LEN:", len(response))
-else:
-    print("NO RESPONSE")
+        ser.reset_input_buffer()
+        ser.write(cmd)
+        ser.flush()
 
-ser.close()
+        time.sleep(0.5)
+
+        response = ser.read(256)
+
+        if response:
+            print("RX HEX:", response.hex(" ").upper())
+            print("RX LEN:", len(response))
+        else:
+            print("NO RESPONSE")
+    finally:
+        ser.close()
+
+
+if __name__ == "__main__":
+    main()

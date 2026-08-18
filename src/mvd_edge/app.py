@@ -104,12 +104,21 @@ def check_config() -> int:
     print("Location:", config.location_id)
     print("Zone:", config.zone_id)
     print("Device:", config.device_id)
+    print("Device Type:", config.device_type)
     print("Reader:", config.reader_id)
+    print("Reader Address:", f"0x{config.reader_address:02X}")
+    print("Reader Verify Method:", config.reader_verify_method)
     print("Serial:", config.serial_port)
     print("Baud:", config.serial_baud)
-    print("API:", "configured" if config.rfid_api_url else "missing")
+    print("API URL:", config.rfid_api_url)
     print("API Key:", "configured" if config.rfid_ingest_api_key else "missing")
+    print("Scan Interval:", f"{config.scan_interval:g}s")
+    print("Exit Timeout:", f"{config.exit_timeout:g}s")
+    print("Serial Reconnect Interval:", f"{config.serial_reconnect_interval:g}s")
+    print("Reader Discovery Interval:", f"{config.reader_discovery_interval:g}s")
+    print("Auto Configure Reader:", str(config.auto_configure_reader).lower())
     print("Heartbeat:", f"every {config.heartbeat_interval:g}s")
+    print("Heartbeat URL:", config.heartbeat_api_url)
     print("Data Directory:", config.edge_data_dir)
 
     if config.edge_log_dir:
@@ -117,8 +126,13 @@ def check_config() -> int:
     else:
         print("Log Directory:", "terminal only")
 
+    print("Queue Retry Interval:", f"{config.queue_retry_interval:g}s")
+    print("Queue Batch Size:", config.queue_batch_size)
+
     if config.target_read_distance_m is not None:
         print("Target Read Distance:", f"{config.target_read_distance_m:g} m")
+    else:
+        print("Target Read Distance:", "not configured")
 
     return 0
 
@@ -280,7 +294,11 @@ def resolve_reader_port(config: EdgeConfig) -> tuple[Optional[str], str, Optiona
         return config.serial_port, "Using configured serial port", None
 
     print("Searching for reader...")
-    result = discover_reader_port(baudrate=config.serial_baud)
+    result = discover_reader_port(
+        baudrate=config.serial_baud,
+        reader_address=config.reader_address,
+        reader_verify_method=config.reader_verify_method,
+    )
 
     if result.selected_port:
         print("READER DETECTED")
@@ -439,6 +457,8 @@ def run_agent(
                     reader = IDT85Reader(
                         port=selected_port,
                         baudrate=config.serial_baud,
+                        address=config.reader_address,
+                        verify_method=config.reader_verify_method,
                     )
                     reader_state, reader_message = connect_and_verify_reader(
                         reader=reader,
@@ -461,9 +481,9 @@ def run_agent(
                     report_reader_unavailable(
                         message=reader_message,
                         port=config.serial_port,
-                        reconnect_interval=config.serial_reconnect_interval,
+                        reconnect_interval=config.reader_discovery_interval,
                     )
-                    next_reader_attempt = now + config.serial_reconnect_interval
+                    next_reader_attempt = now + config.reader_discovery_interval
                 else:
                     health_state.clear_error()
 
@@ -484,11 +504,11 @@ def run_agent(
 
                 if reader_state == ReaderState.DISCONNECTED:
                     reader_state = ReaderState.DISCONNECTED
-                    next_reader_attempt = time.time() + config.serial_reconnect_interval
+                    next_reader_attempt = time.time() + config.reader_discovery_interval
                     print("READER DISCONNECTED")
                     print("Port:", reader.port)
                     print(reader_message)
-                    print(f"Retrying in {config.serial_reconnect_interval:g}s...")
+                    print(f"Retrying in {config.reader_discovery_interval:g}s...")
 
             for event in events:
                 health_state.mark_event()

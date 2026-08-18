@@ -1,8 +1,8 @@
 # MVD Insights Edge Agent Windows Service
 
 This is the Windows service foundation for MVD Insights Edge Agent. It defines
-the target layout and service wrapper configuration, but it is not a finished
-installer and has not been validated on Windows in this step.
+the target layout, service wrapper configuration, and scripted service
+installation foundation. It has not been validated on Windows in this step.
 
 ## Service Architecture
 
@@ -13,6 +13,12 @@ The selected first wrapper strategy is WinSW because it can run an existing
 This step does not download WinSW binaries. A future installer or release
 bundle must provide the wrapper binary and verify its version, checksum, and
 signature.
+
+Third-party dependency notes:
+
+```text
+packaging/windows/THIRD_PARTY.md
+```
 
 ## Target Filesystem
 
@@ -95,6 +101,22 @@ before live event processing.
 
 ## Current Limitations
 
-Windows service validation, installer creation, service-account setup,
+Windows service validation, EXE/MSI installer creation, service-account setup,
 automatic permission configuration, code signing, and upgrade/rollback are
 pending future steps.
+
+Scripted service foundation:
+
+```text
+packaging/windows/scripts/install-service.ps1
+packaging/windows/scripts/uninstall-service.ps1
+packaging/windows/scripts/check-install.ps1
+```
+
+Default uninstall preserves:
+
+```text
+%ProgramData%\MVD Insights\Edge Agent\edge.env
+%ProgramData%\MVD Insights\Edge Agent\data
+%ProgramData%\MVD Insights\Edge Agent\logs
+```

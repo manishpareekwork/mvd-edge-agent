@@ -12,6 +12,7 @@ WorkingDirectory=/opt/mvd-edge
 Environment=MVD_EDGE_CONFIG=/etc/mvd-edge/edge.env
 Environment=EDGE_DATA_DIR=/var/lib/mvd-edge
 Environment=EDGE_LOG_DIR=/var/log/mvd-edge
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/mvd-edge/mvd-edge-agent
 Restart=on-failure
 RestartSec=10

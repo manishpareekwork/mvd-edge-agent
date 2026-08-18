@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,8 +17,13 @@ def write_config(path: Path, **overrides) -> None:
     values = {
         "RFID_API_URL": "https://api.example.test/api/v1/rfid/events",
         "RFID_INGEST_API_KEY": "super-secret-test-key",
+        "SITE_ID": "EXPERIENCE-CENTER",
+        "LOCATION_ID": "GATE-1",
+        "ZONE_ID": "INBOUND",
         "DEVICE_ID": "EXP-CENTER-EDGE-01",
         "READER_ID": "LAB-RFID-01",
+        "READER_ADDRESS": "0x00",
+        "READER_VERIFY_METHOD": "AUTO",
         "SERIAL_PORT": "AUTO",
         "EDGE_DATA_DIR": str(path.parent / "data"),
     }
@@ -41,9 +47,15 @@ class CliPackagingTests(unittest.TestCase):
 
     def test_version_prints_authoritative_version(self):
         code, output = self.run_cli(["--version"], {})
+        expected_version = re.search(
+            r'^version\s*=\s*"([^"]+)"',
+            Path("pyproject.toml").read_text(),
+            re.MULTILINE,
+        ).group(1)
 
         self.assertEqual(code, 0)
-        self.assertIn(f"MVD Insights Edge Agent {__version__}", output)
+        self.assertEqual(__version__, expected_version)
+        self.assertIn(f"MVD Insights Edge Agent {expected_version}", output)
         self.assertIn("Python:", output)
 
     def test_check_config_succeeds_with_valid_config_and_hides_secret(self):
@@ -58,7 +70,12 @@ class CliPackagingTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("VALID", output)
+        self.assertIn("API URL: https://api.example.test/api/v1/rfid/events", output)
         self.assertIn("API Key: configured", output)
+        self.assertIn("Reader Address: 0x00", output)
+        self.assertIn("Reader Verify Method: AUTO", output)
+        self.assertIn("Reader Discovery Interval: 5s", output)
+        self.assertIn("Queue Batch Size: 20", output)
         self.assertNotIn("super-secret-test-key", output)
 
     def test_check_config_rejects_missing_required_config(self):
@@ -73,6 +90,43 @@ class CliPackagingTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("INVALID", output)
+
+    def test_check_config_rejects_missing_api_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "edge.env"
+            write_config(config_path, RFID_INGEST_API_KEY="")
+
+            code, output = self.run_cli(
+                ["--check-config"],
+                {"MVD_EDGE_CONFIG": str(config_path)},
+            )
+
+        self.assertEqual(code, 1)
+        self.assertIn("RFID_INGEST_API_KEY is required", output)
+
+    def test_check_config_rejects_invalid_numeric_values(self):
+        invalid_values = {
+            "SERIAL_BAUD": "abc",
+            "SCAN_INTERVAL": "-1",
+            "EXIT_TIMEOUT": "0",
+            "TARGET_READ_DISTANCE_M": "-3",
+            "READER_ADDRESS": "0x100",
+            "READER_VERIFY_METHOD": "INVENTORY",
+            "READER_DISCOVERY_INTERVAL": "0",
+        }
+
+        for name, value in invalid_values.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                config_path = Path(directory) / "edge.env"
+                write_config(config_path, **{name: value})
+
+                code, output = self.run_cli(
+                    ["--check-config"],
+                    {"MVD_EDGE_CONFIG": str(config_path)},
+                )
+
+                self.assertEqual(code, 1)
+                self.assertIn(name, output)
 
     def test_mvd_edge_config_path_is_respected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -117,6 +171,38 @@ class CliPackagingTests(unittest.TestCase):
                 self.assertEqual(queue.pending_count(), 0)
             finally:
                 queue.close()
+
+    def test_existing_config_can_omit_optional_service_path_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory) / "service-data"
+            log_dir = Path(directory) / "service-logs"
+            config_path = Path(directory) / "old-edge.env"
+            config_path.write_text(
+                "\n".join([
+                    "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=super-secret-test-key",
+                    "SITE_ID=EXPERIENCE-CENTER",
+                    "LOCATION_ID=GATE-1",
+                    "ZONE_ID=INBOUND",
+                    "DEVICE_ID=EXP-CENTER-EDGE-01",
+                    "READER_ID=LAB-RFID-01",
+                    "SERIAL_PORT=AUTO",
+                ])
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "MVD_EDGE_CONFIG": str(config_path),
+                    "EDGE_DATA_DIR": str(data_dir),
+                    "EDGE_LOG_DIR": str(log_dir),
+                },
+                clear=True,
+            ):
+                config = EdgeConfig.from_env()
+
+        self.assertEqual(config.edge_data_dir, data_dir)
+        self.assertEqual(config.edge_log_dir, log_dir)
 
     def test_no_developer_absolute_path_in_runtime_defaults(self):
         source_files = [

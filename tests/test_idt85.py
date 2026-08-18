@@ -1,9 +1,12 @@
 import unittest
+from unittest.mock import patch
 
 from mvd_edge.adapters.idt85 import (
     ANSWER_MODE,
     GET_READER_INFO_COMMAND,
     GET_WORK_MODE_COMMAND,
+    IDT85Reader,
+    INVENTORY_COMMAND,
     SET_WORK_MODE_COMMAND,
     build_inventory_command,
     build_get_reader_info_command,
@@ -14,6 +17,61 @@ from mvd_edge.adapters.idt85 import (
     parse_inventory_response,
     parse_work_mode_response,
 )
+
+
+class ScriptedSerial:
+    responses_by_port = {}
+    writes_by_port = {}
+    read_sizes_by_port = {}
+
+    def __init__(
+        self,
+        *,
+        port,
+        baudrate,
+        bytesize,
+        parity,
+        stopbits,
+        timeout,
+    ):
+        self.port = port
+        self.responses = list(self.responses_by_port.get(port, []))
+        self.closed = False
+        self.writes_by_port.setdefault(port, [])
+        self.read_sizes_by_port.setdefault(port, [])
+
+    def reset_input_buffer(self):
+        pass
+
+    def write(self, command):
+        self.writes_by_port[self.port].append(command)
+
+    def flush(self):
+        pass
+
+    def read(self, size):
+        self.read_sizes_by_port[self.port].append(size)
+
+        if not self.responses:
+            return b""
+
+        current = self.responses[0]
+        response = current[:size]
+        current = current[size:]
+
+        if current:
+            self.responses[0] = current
+        else:
+            self.responses.pop(0)
+
+        return response
+
+    def close(self):
+        self.closed = True
+
+
+def response_for(command: int) -> bytes:
+    return bytes([0x05, 0x00, command, 0x00, 0x00])
 
 
 class IDT85ParserTests(unittest.TestCase):
@@ -96,6 +154,108 @@ class IDT85ParserTests(unittest.TestCase):
         frame = bytes([0x00, 0x00, 0x36, 0x01, 0x00, 0x00])
 
         self.assertEqual(parse_inventory_response(frame), [])
+
+
+class IDT85VerificationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        ScriptedSerial.responses_by_port = {}
+        ScriptedSerial.writes_by_port = {}
+        ScriptedSerial.read_sizes_by_port = {}
+
+    def verify_with_responses(self, responses):
+        port = "/dev/test-reader"
+        ScriptedSerial.responses_by_port = {port: responses}
+        reader = IDT85Reader(port=port, baudrate=57600, read_delay=0)
+
+        with patch("mvd_edge.adapters.idt85.serial.Serial", ScriptedSerial):
+            reader.open()
+            try:
+                verified = reader.verify_reader()
+            finally:
+                reader.close()
+
+        return verified, ScriptedSerial.writes_by_port[port]
+
+    def test_valid_reader_info_response_verifies_without_fallback(self) -> None:
+        verified, writes = self.verify_with_responses([
+            response_for(GET_READER_INFO_COMMAND),
+        ])
+
+        self.assertTrue(verified)
+        self.assertEqual(writes, [build_get_reader_info_command()])
+
+    def test_invalid_reader_info_valid_work_mode_response_verifies(self) -> None:
+        verified, writes = self.verify_with_responses([
+            response_for(INVENTORY_COMMAND),
+            response_for(GET_WORK_MODE_COMMAND),
+        ])
+
+        self.assertTrue(verified)
+        self.assertEqual(
+            writes,
+            [
+                build_get_reader_info_command(),
+                build_get_work_mode_command(address=0x00),
+            ],
+        )
+
+    def test_invalid_reader_info_invalid_work_mode_response_does_not_verify(self) -> None:
+        verified, writes = self.verify_with_responses([
+            response_for(INVENTORY_COMMAND),
+            b"",
+        ])
+
+        self.assertFalse(verified)
+        self.assertEqual(
+            writes,
+            [
+                build_get_reader_info_command(),
+                build_get_work_mode_command(address=0x00),
+            ],
+        )
+
+    def test_verification_does_not_require_tag_inventory(self) -> None:
+        verified, writes = self.verify_with_responses([
+            b"",
+            response_for(GET_WORK_MODE_COMMAND),
+        ])
+
+        self.assertTrue(verified)
+        self.assertNotIn(build_inventory_command(), writes)
+        self.assertNotIn(build_set_answer_mode_command(), writes)
+
+    def test_send_command_reads_length_byte_then_remaining_frame(self) -> None:
+        port = "/dev/test-reader"
+        frame = bytes.fromhex(
+            "13 00 01 01 01 0C E2 80 69 15 00 00 50 32 42 41 CC ED 57 78"
+        )
+        ScriptedSerial.responses_by_port = {port: [frame]}
+        reader = IDT85Reader(port=port, baudrate=57600, read_delay=0)
+
+        with patch("mvd_edge.adapters.idt85.serial.Serial", ScriptedSerial):
+            reader.open()
+            try:
+                response = reader._send_command(build_inventory_command())
+            finally:
+                reader.close()
+
+        self.assertEqual(ScriptedSerial.read_sizes_by_port[port], [1, 0x13])
+        self.assertEqual(response, frame)
+
+    def test_send_command_empty_first_byte_returns_empty_response(self) -> None:
+        port = "/dev/test-reader"
+        ScriptedSerial.responses_by_port = {port: [b""]}
+        reader = IDT85Reader(port=port, baudrate=57600, read_delay=0)
+
+        with patch("mvd_edge.adapters.idt85.serial.Serial", ScriptedSerial):
+            reader.open()
+            try:
+                response = reader._send_command(build_inventory_command())
+            finally:
+                reader.close()
+
+        self.assertEqual(ScriptedSerial.read_sizes_by_port[port], [1])
+        self.assertEqual(response, b"")
 
 
 if __name__ == "__main__":

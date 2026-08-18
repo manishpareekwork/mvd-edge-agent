@@ -10,6 +10,14 @@ GET_WORK_MODE_COMMAND = 0x36
 SET_WORK_MODE_COMMAND = 0x35
 ANSWER_MODE = 0x00
 SCAN_MODE = 0x01
+VERIFY_AUTO = "AUTO"
+VERIFY_READER_INFO = "READER_INFO"
+VERIFY_WORK_MODE = "WORK_MODE"
+SUPPORTED_VERIFY_METHODS = (
+    VERIFY_AUTO,
+    VERIFY_READER_INFO,
+    VERIFY_WORK_MODE,
+)
 ANSWER_MODE_PARAMS = bytes([
     0x00,
     0x00,
@@ -135,12 +143,14 @@ class IDT85Reader:
         address: int = 0x00,
         read_delay: float = 0.20,
         read_size: int = 4096,
+        verify_method: str = VERIFY_AUTO,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
         self.address = address
         self.read_delay = read_delay
         self.read_size = read_size
+        self.verify_method = verify_method.upper()
         self._serial: Optional[serial.Serial] = None
         self._inventory_command = build_inventory_command(address=address)
         self._reader_info_command = build_get_reader_info_command()
@@ -180,16 +190,40 @@ class IDT85Reader:
 
         time.sleep(self.read_delay if read_delay is None else read_delay)
 
-        return self._serial.read(self.read_size)
+        first = self._serial.read(1)
+
+        if not first:
+            return b""
+
+        remaining_length = first[0]
+        rest = self._serial.read(remaining_length)
+
+        return first + rest
 
     def get_reader_info(self) -> bytes:
         return self._send_command(self._reader_info_command)
 
     def verify_reader(self) -> bool:
-        return is_valid_command_response(
-            self.get_reader_info(),
-            GET_READER_INFO_COMMAND,
-        )
+        if self.verify_method not in SUPPORTED_VERIFY_METHODS:
+            raise ValueError(f"Unsupported reader verify method: {self.verify_method}")
+
+        if self.verify_method in (VERIFY_AUTO, VERIFY_READER_INFO):
+            if is_valid_command_response(
+                self.get_reader_info(),
+                GET_READER_INFO_COMMAND,
+            ):
+                return True
+
+            if self.verify_method == VERIFY_READER_INFO:
+                return False
+
+        if self.verify_method in (VERIFY_AUTO, VERIFY_WORK_MODE):
+            return is_valid_command_response(
+                self._send_command(self._get_work_mode_command),
+                GET_WORK_MODE_COMMAND,
+            )
+
+        return False
 
     def get_work_mode(self) -> Optional[int]:
         return parse_work_mode_response(

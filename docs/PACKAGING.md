@@ -8,6 +8,11 @@
 - PyInstaller configuration: `packaging/pyinstaller/mvd-edge-agent.spec`
 - Linux systemd template: `packaging/linux/systemd/mvd-edge.service`
 - Windows service wrapper template: `packaging/windows/service/MVDInsightsEdgeAgent.xml`
+- Linux installer foundation: `packaging/linux/install.sh`
+- Linux uninstaller foundation: `packaging/linux/uninstall.sh`
+- Linux release bundle assembler: `packaging/linux/assemble-release.sh`
+- Windows scripted service foundation: `packaging/windows/scripts/`
+- USB distribution template: `packaging/usb/`
 - Initial build type: one-folder distribution
 - macOS packaging proof: pending unless PyInstaller is installed locally
 - Windows/Linux builds and service validation: pending
@@ -39,10 +44,12 @@ Equivalent helper:
 sh scripts/build_local.sh
 ```
 
-Expected local output:
+Expected native output:
 
 ```text
 dist/mvd-edge-agent/
+├── mvd-edge-agent
+└── _internal/
 ```
 
 Generated `build/` and `dist/` directories are ignored by Git.
@@ -105,7 +112,7 @@ Windows data:   %ProgramData%\MVD Insights\Edge Agent\data
 Windows logs:   %ProgramData%\MVD Insights\Edge Agent\logs
 ```
 
-Before enabling a service, run:
+Before starting a service, run:
 
 ```bash
 mvd-edge-agent --check-config
@@ -113,6 +120,136 @@ mvd-edge-agent --check-config
 
 Missing required configuration and SQLite initialization failures are fatal.
 Reader unavailable and cloud unavailable are recoverable runtime states.
+
+## Linux Installer Foundation
+
+Script path:
+
+```bash
+packaging/linux/install.sh
+```
+
+The script is designed for an already-built Linux artifact and does not attempt
+to build Linux binaries from macOS. It installs the complete PyInstaller onedir
+runtime:
+
+```text
+/opt/mvd-edge/mvd-edge-agent
+/opt/mvd-edge/_internal/
+/opt/mvd-edge/docs/LINUX_SERVICE.md
+/etc/mvd-edge/edge.env
+/var/lib/mvd-edge/
+/var/log/mvd-edge/
+/etc/systemd/system/mvd-edge.service
+```
+
+Upgrade behavior is intentionally conservative: the binary and systemd unit may
+be replaced, and stale application runtime files under `/opt/mvd-edge/` may be
+removed, but an existing `/etc/mvd-edge/edge.env`, SQLite data under
+`/var/lib/mvd-edge/`, and logs under `/var/log/mvd-edge/` are preserved.
+
+Default first install behavior is commissioning-friendly:
+
+- create the service account
+- add the service account to `dialout` when present
+- install the application runtime
+- create `/etc/mvd-edge/edge.env` from the blank template only if absent
+- install and enable the systemd service for future boots
+- do not run preflight by default
+- do not start the service by default
+
+After editing `/etc/mvd-edge/edge.env`, run explicit preflight and start:
+
+```bash
+sudo ./preflight.sh
+sudo systemctl start mvd-edge
+```
+
+Safe staged validation is supported:
+
+```bash
+DESTDIR=/tmp/mvd-edge-test AGENT_RUNTIME_DIR=/path/to/dist/mvd-edge-agent sh packaging/linux/install.sh
+DESTDIR=/tmp/mvd-edge-test sh packaging/linux/uninstall.sh
+```
+
+Staged install does not create users, call systemd, or touch real `/opt`,
+`/etc`, or `/var`.
+
+## Linux Preflight
+
+Script path:
+
+```bash
+packaging/linux/preflight.sh
+```
+
+Preflight checks the executable, config file, writable data/log directories,
+serial setting syntax, API URL presence, API key presence without printing the
+key, and `mvd-edge-agent --check-config`.
+
+Hardware and cloud connectivity tests remain future optional flags.
+
+## Linux Aarch64 Release Bundle
+
+Build on the Debian 12 aarch64 gateway or an equivalent native aarch64 Linux
+environment:
+
+```bash
+python3 -m pip install -e ".[build]"
+pyinstaller packaging/pyinstaller/mvd-edge-agent.spec
+ARCH=aarch64 sh packaging/linux/assemble-release.sh
+```
+
+Expected bundle:
+
+```text
+release/mvd-edge-agent-<pyproject-version>-linux-aarch64/
+├── executable/
+│   ├── mvd-edge-agent
+│   └── _internal/
+├── install.sh
+├── uninstall.sh
+├── preflight.sh
+├── config/edge.env.example
+├── systemd/mvd-edge.service
+├── docs/LINUX_SERVICE.md
+└── INSTALL.md
+```
+
+The bundle is self-contained for installation on another Debian 12 aarch64
+gateway. It must not include Git metadata, `.env`, API keys, development venvs,
+tests, SQLite runtime data, logs, or source code.
+
+## Windows Installation Foundation
+
+Script paths:
+
+```text
+packaging/windows/scripts/install-service.ps1
+packaging/windows/scripts/uninstall-service.ps1
+packaging/windows/scripts/check-install.ps1
+```
+
+The scripts are written for a future Windows bundle containing
+`mvd-edge-agent.exe`, the reviewed WinSW wrapper executable, and
+`MVDInsightsEdgeAgent.xml`. They preserve existing ProgramData configuration,
+data, and logs by default.
+
+This repository does not bundle a WinSW executable. See
+`packaging/windows/THIRD_PARTY.md`.
+
+## USB Distribution Template
+
+Template path:
+
+```text
+packaging/usb/
+```
+
+The USB directory documents the future offline bundle layout and includes
+driver guidance plus a technician quick start. It intentionally contains no
+fake executables, third-party binaries, proprietary drivers, or generated
+checksums.
 
 ## Security
 
@@ -128,13 +265,13 @@ Future Windows installer:
 MVDInsightsEdgeAgent-Setup.exe
 ```
 
-Future Linux installer/package:
+Future Linux package:
 
 ```text
 install package/script
 ```
 
-Future USB bundle shape:
+USB bundle shape:
 
 ```text
 MVD-Edge-Agent/
@@ -156,7 +293,7 @@ connect reader -> insert USB -> run installer -> configure -> validate -> start 
 ## Future Cloud Distribution
 
 Future releases can use GitHub Releases or MVD-hosted signed downloads with
-versioned artifacts such as `v0.1.0`.
+versioned artifacts that match the package version.
 
 Pending release requirements:
 

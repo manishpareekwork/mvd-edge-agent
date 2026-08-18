@@ -1,12 +1,14 @@
 # MVD Insights Edge Agent Linux Service
 
 This is the Linux service foundation for MVD Insights Edge Agent. It defines the
-target layout and systemd template, but it is not a finished installer.
+target layout, systemd template, and scripted installer foundation. Linux
+industrial PC field validation is still pending.
 
 ## Target Filesystem
 
 ```text
-/opt/mvd-edge/                 application files and mvd-edge-agent
+/opt/mvd-edge/                 PyInstaller onedir runtime and mvd-edge-agent
+/opt/mvd-edge/docs/            installed service documentation
 /etc/mvd-edge/edge.env         external deployment configuration
 /var/lib/mvd-edge/             persistent SQLite queue and runtime data
 /var/log/mvd-edge/             future persistent service logs
@@ -25,9 +27,9 @@ User=mvd-edge
 Group=mvd-edge
 ```
 
-This step does not create the account. A future installer should create it,
-own `/var/lib/mvd-edge/` and `/var/log/mvd-edge/`, and grant read access to
-`/etc/mvd-edge/edge.env`.
+`packaging/linux/install.sh` creates this account during a real Linux install
+when it does not already exist. The account is system-only and uses
+`/usr/sbin/nologin`. Staged installs with `DESTDIR` skip user creation.
 
 ## Serial Permissions
 
@@ -42,6 +44,9 @@ sudo usermod -a -G dialout mvd-edge
 ```
 
 `SERIAL_PORT=AUTO` still requires permission to open discovered serial devices.
+The installer adds `mvd-edge` to `dialout` only when that group exists. If the
+distribution uses a different group or udev policy, grant serial access
+manually. Do not use broad device permissions such as `chmod 777`.
 
 ## Service Template
 
@@ -57,6 +62,7 @@ The template sets:
 MVD_EDGE_CONFIG=/etc/mvd-edge/edge.env
 EDGE_DATA_DIR=/var/lib/mvd-edge
 EDGE_LOG_DIR=/var/log/mvd-edge
+PYTHONUNBUFFERED=1
 ```
 
 The service starts after `network-online.target`, restarts on unexpected
@@ -77,10 +83,17 @@ devices, network access, `/etc/mvd-edge/`, `/var/lib/mvd-edge/`, and
 
 ## Commissioning
 
-Before enabling the service, validate the external config:
+The installer enables the service for future boots but does not start it by
+default. Edit the external config first:
 
 ```bash
-MVD_EDGE_CONFIG=/etc/mvd-edge/edge.env /opt/mvd-edge/mvd-edge-agent --check-config
+sudo editor /etc/mvd-edge/edge.env
+```
+
+Then validate the external config:
+
+```bash
+sudo ./preflight.sh
 ```
 
 This does not open the reader or contact cloud.
@@ -116,13 +129,36 @@ before live event processing.
 
 ## Logging
 
-Linux service logging initially uses stdout/stderr through the systemd journal.
-`EDGE_LOG_DIR=/var/log/mvd-edge` is reserved for future file logging or service
-packaging needs.
+Linux service logging uses stdout/stderr through the systemd journal.
+`PYTHONUNBUFFERED=1` is set in the service so application output is visible
+promptly in `journalctl`. `EDGE_LOG_DIR=/var/log/mvd-edge` is reserved for
+future file logging or service packaging needs.
 
-## Upgrades And Uninstall
+## Installer, Upgrades, And Uninstall
 
-Upgrade and uninstall behavior is pending installer work. Future installers
-should stop the service, replace application files under `/opt/mvd-edge/`,
-preserve `/etc/mvd-edge/edge.env` and `/var/lib/mvd-edge/`, then restart the
-service.
+Installer paths:
+
+```bash
+packaging/linux/install.sh
+packaging/linux/uninstall.sh
+packaging/linux/preflight.sh
+```
+
+Upgrade behavior replaces the application runtime and service template while
+preserving:
+
+```text
+/etc/mvd-edge/edge.env
+/var/lib/mvd-edge/
+/var/log/mvd-edge/
+```
+
+Default uninstall stops/disables the service and removes executable/service
+files, but preserves config, runtime data, and logs. Full purge is an explicit
+operator action, not the default.
+
+Staged install test:
+
+```bash
+DESTDIR=/tmp/mvd-edge-test AGENT_RUNTIME_DIR=/path/to/dist/mvd-edge-agent sh packaging/linux/install.sh
+```

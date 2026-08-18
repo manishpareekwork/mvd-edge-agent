@@ -5,7 +5,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import copy_metadata
 
 
-project_root = Path(SPECPATH).parents[2]
+project_root = Path(SPECPATH).parents[1]
 
 
 a = Analysis(
