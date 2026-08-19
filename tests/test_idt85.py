@@ -7,11 +7,13 @@ from mvd_edge.adapters.idt85 import (
     GET_WORK_MODE_COMMAND,
     IDT85Reader,
     INVENTORY_COMMAND,
+    InventoryStatus,
     SET_WORK_MODE_COMMAND,
     build_inventory_command,
     build_get_reader_info_command,
     build_get_work_mode_command,
     build_set_answer_mode_command,
+    classify_inventory_response,
     format_work_mode,
     is_valid_command_response,
     parse_inventory_response,
@@ -72,6 +74,19 @@ class ScriptedSerial:
 
 def response_for(command: int) -> bytes:
     return bytes([0x05, 0x00, command, 0x00, 0x00])
+
+
+def inventory_frame(tags=None, status=0x01) -> bytes:
+    body = bytearray([0x00, INVENTORY_COMMAND, status, 0x00])
+
+    for epc in tags or []:
+        epc_bytes = bytes.fromhex(epc)
+        body[3] += 1
+        body.append(len(epc_bytes))
+        body.extend(epc_bytes)
+
+    body.extend([0x00, 0x00])
+    return bytes([len(body)]) + bytes(body)
 
 
 class IDT85ParserTests(unittest.TestCase):
@@ -154,6 +169,37 @@ class IDT85ParserTests(unittest.TestCase):
         frame = bytes([0x00, 0x00, 0x36, 0x01, 0x00, 0x00])
 
         self.assertEqual(parse_inventory_response(frame), [])
+
+    def test_classifies_valid_zero_tag_frame(self) -> None:
+        result = classify_inventory_response(inventory_frame())
+
+        self.assertEqual(result.status, InventoryStatus.VALID)
+        self.assertEqual(result.tags, [])
+
+    def test_classifies_valid_tagged_frame(self) -> None:
+        result = classify_inventory_response(
+            inventory_frame(["E28069150000503242419E26"])
+        )
+
+        self.assertEqual(result.status, InventoryStatus.VALID)
+        self.assertEqual(result.tags, ["E28069150000503242419E26"])
+
+    def test_classifies_no_response(self) -> None:
+        result = classify_inventory_response(b"")
+
+        self.assertEqual(result.status, InventoryStatus.NO_RESPONSE)
+        self.assertEqual(result.tags, [])
+
+    def test_classifies_malformed_truncated_frame(self) -> None:
+        result = classify_inventory_response(inventory_frame(["AABBCC"])[:-1])
+
+        self.assertEqual(result.status, InventoryStatus.MALFORMED)
+        self.assertEqual(result.tags, [])
+
+    def test_classifies_malformed_invalid_command(self) -> None:
+        result = classify_inventory_response(bytes([0x06, 0x00, 0x36, 0x01, 0x00, 0x00, 0x00]))
+
+        self.assertEqual(result.status, InventoryStatus.MALFORMED)
 
 
 class IDT85VerificationTests(unittest.TestCase):
@@ -256,6 +302,21 @@ class IDT85VerificationTests(unittest.TestCase):
 
         self.assertEqual(ScriptedSerial.read_sizes_by_port[port], [1])
         self.assertEqual(response, b"")
+
+    def test_inventory_returns_classified_result(self) -> None:
+        port = "/dev/test-reader"
+        ScriptedSerial.responses_by_port = {port: [inventory_frame()]}
+        reader = IDT85Reader(port=port, baudrate=57600, read_delay=0)
+
+        with patch("mvd_edge.adapters.idt85.serial.Serial", ScriptedSerial):
+            reader.open()
+            try:
+                result = reader.inventory()
+            finally:
+                reader.close()
+
+        self.assertEqual(result.status, InventoryStatus.VALID)
+        self.assertEqual(result.tags, [])
 
 
 if __name__ == "__main__":

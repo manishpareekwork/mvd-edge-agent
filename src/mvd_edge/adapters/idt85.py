@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+from enum import Enum
 import time
 from typing import Optional
 
@@ -26,6 +28,18 @@ ANSWER_MODE_PARAMS = bytes([
     0x01,
     0x00,
 ])
+
+
+class InventoryStatus(str, Enum):
+    VALID = "VALID"
+    NO_RESPONSE = "NO_RESPONSE"
+    MALFORMED = "MALFORMED"
+
+
+@dataclass(frozen=True)
+class InventoryResult:
+    status: InventoryStatus
+    tags: list[str]
 
 
 def crc16(data: bytes) -> int:
@@ -135,6 +149,47 @@ def parse_inventory_response(response: bytes) -> list[str]:
     return tags
 
 
+def classify_inventory_response(response: bytes) -> InventoryResult:
+    if not response:
+        return InventoryResult(status=InventoryStatus.NO_RESPONSE, tags=[])
+
+    expected_length = response[0] + 1
+    if response[0] and len(response) != expected_length:
+        return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+    if len(response) < 6:
+        return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+    if response[2] != INVENTORY_COMMAND:
+        return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+    status = response[3]
+
+    if status not in (0x01, 0x02, 0x03, 0x04):
+        return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+    tag_count = response[4]
+    position = 5
+    tags: list[str] = []
+
+    for _ in range(tag_count):
+        if position >= len(response) - 2:
+            return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+        epc_length = response[position]
+        position += 1
+
+        if position + epc_length > len(response) - 2:
+            return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+        epc_bytes = response[position:position + epc_length]
+        position += epc_length
+
+        tags.append(epc_bytes.hex().upper())
+
+    return InventoryResult(status=InventoryStatus.VALID, tags=tags)
+
+
 class IDT85Reader:
     def __init__(
         self,
@@ -234,6 +289,9 @@ class IDT85Reader:
         response = self._send_command(self._set_answer_mode_command)
         return is_valid_command_response(response, SET_WORK_MODE_COMMAND)
 
-    def inventory(self) -> list[str]:
+    def inventory(self) -> InventoryResult:
         response = self._send_command(self._inventory_command)
-        return parse_inventory_response(response)
+        return classify_inventory_response(response)
+
+    def inventory_result(self) -> InventoryResult:
+        return self.inventory()

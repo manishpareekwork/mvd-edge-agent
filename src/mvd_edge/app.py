@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
 from enum import Enum
+import logging
 import platform
 import signal
 import sys
@@ -9,7 +10,13 @@ from types import FrameType
 from typing import Any, Callable, Optional
 
 from mvd_edge import __version__
-from mvd_edge.adapters.idt85 import ANSWER_MODE, IDT85Reader, format_work_mode
+from mvd_edge.adapters.idt85 import (
+    ANSWER_MODE,
+    IDT85Reader,
+    InventoryResult,
+    InventoryStatus,
+    format_work_mode,
+)
 from mvd_edge.config import EdgeConfig
 from mvd_edge.discovery.serial import DiscoveryResult, discover_reader_port
 from mvd_edge.event_engine.state import DetectedEvent, PresenceState
@@ -23,6 +30,9 @@ class ReaderState(str, Enum):
     CONNECTING = "CONNECTING"
     READY = "READY"
     CONFIG_ERROR = "CONFIG_ERROR"
+
+
+logger = logging.getLogger(__name__)
 
 
 class ShutdownController:
@@ -324,16 +334,49 @@ def read_inventory_events(
     state: PresenceState,
     health_state: Optional[HealthState] = None,
 ) -> tuple[ReaderState, list[DetectedEvent], str]:
+    started_at = time.time()
+
     try:
-        tags = reader.inventory()
+        inventory_result = getattr(reader, "inventory_result", None)
+
+        if callable(inventory_result):
+            result = inventory_result()
+        else:
+            legacy_result = reader.inventory()
+            if isinstance(legacy_result, InventoryResult):
+                result = legacy_result
+            else:
+                result = InventoryResult(
+                    status=InventoryStatus.VALID,
+                    tags=legacy_result,
+                )
+
+        duration_ms = (time.time() - started_at) * 1000
+        logger.debug(
+            "inventory status=%s epc_count=%d duration_ms=%.1f",
+            result.status.value,
+            len(result.tags),
+            duration_ms,
+        )
+
         if health_state:
-            health_state.mark_reader_activity()
-        return ReaderState.READY, state.update(tags, now=time.time()), ""
+            if result.status == InventoryStatus.VALID:
+                health_state.mark_inventory_success(result.tags)
+            elif result.status == InventoryStatus.NO_RESPONSE:
+                health_state.mark_inventory_no_response()
+            else:
+                health_state.mark_inventory_malformed()
+
+        if result.status != InventoryStatus.VALID:
+            return ReaderState.READY, [], result.status.value
+
+        return ReaderState.READY, state.update(result.tags, now=time.time()), ""
     except Exception as exc:
         reader.close()
         if health_state:
             health_state.set_reader_state(ReaderState.DISCONNECTED.value)
             health_state.mark_error("SERIAL_DISCONNECTED")
+            health_state.mark_reader_offline(str(exc))
         return ReaderState.DISCONNECTED, [], str(exc)
 
 
@@ -450,6 +493,7 @@ def run_agent(
             if now >= next_reader_attempt and reader_state != ReaderState.READY:
                 reader_state = ReaderState.CONNECTING
                 health_state.set_reader_state(reader_state.value)
+                health_state.mark_reconnect_attempt()
 
                 selected_port, reader_message, discovery_result = resolve_reader_port(config)
 
@@ -483,8 +527,10 @@ def run_agent(
                         port=config.serial_port,
                         reconnect_interval=config.reader_discovery_interval,
                     )
+                    health_state.mark_reader_offline(reader_message)
                     next_reader_attempt = now + config.reader_discovery_interval
                 else:
+                    health_state.mark_reader_ready()
                     health_state.clear_error()
 
             events: list[DetectedEvent] = []

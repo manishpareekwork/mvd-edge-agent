@@ -136,6 +136,11 @@ policy will define delivered-record pruning.
 The stable `edge_event_id` is stored inside each queued payload and reused on
 retry, so retry delivery is safe against duplicate cloud records.
 
+Follow-up: cloud/API delivery currently runs in the same process loop as RFID
+inventory. Slow cloud calls or a large pending retry batch can stretch the
+effective inventory polling cadence. Edge Agent 0.1.4 intentionally does not
+change this behavior.
+
 ## Reader Connection Recovery
 
 The agent can start when the configured serial reader is unavailable. It still
