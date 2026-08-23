@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,6 +120,7 @@ def response_for(command):
 def config(serial_port="AUTO", target_read_distance_m=None):
     return EdgeConfig(
         application_profile="RFID_ASSET_TRACKING",
+        customer_id="MVD-INSIGHTS",
         site_id="EXPERIENCE-CENTER",
         location_id="GATE-1",
         zone_id="INBOUND",
@@ -127,6 +129,9 @@ def config(serial_port="AUTO", target_read_distance_m=None):
         reader_id="LAB-RFID-01",
         reader_address=0x00,
         reader_verify_method="AUTO",
+        usb_vendor_id=None,
+        usb_product_id=None,
+        usb_serial=None,
         serial_port=serial_port,
         serial_baud=57600,
         rfid_api_url="https://api.example.test/api/v1/rfid/events",
@@ -171,6 +176,40 @@ class SerialDiscoveryTests(unittest.TestCase):
         self.assertEqual(message, "Using configured serial port")
         self.assertIsNone(result)
 
+    def test_explicit_stable_by_id_path_bypasses_discovery(self):
+        serial_path = (
+            "/dev/serial/by-id/"
+            "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_field-if00-port0"
+        )
+
+        selected_port, message, result = resolve_reader_port(
+            config(serial_port=serial_path)
+        )
+
+        self.assertEqual(selected_port, serial_path)
+        self.assertEqual(message, "Using configured serial port")
+        self.assertIsNone(result)
+
+    def test_injected_tty_candidate_does_not_require_real_filesystem_or_by_id(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB_DOES_NOT_EXIST"}
+
+        with patch(
+            "mvd_edge.discovery.serial.enumerate_by_id_paths",
+            side_effect=AssertionError("by-id lookup should be injected"),
+        ):
+            result = discover_reader_port(
+                baudrate=57600,
+                port_infos=[
+                    FakePort(
+                        "/dev/ttyUSB_DOES_NOT_EXIST",
+                        description="CP210x USB Serial",
+                    ),
+                ],
+                reader_factory=FakeReader,
+            )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB_DOES_NOT_EXIST")
+
     def test_auto_with_one_supported_reader_selects_it(self):
         FakeReader.verified_ports = {"/dev/ttyUSB0"}
 
@@ -185,6 +224,198 @@ class SerialDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(result.selected_port, "/dev/ttyUSB0")
         self.assertEqual(len(result.supported_readers), 1)
+
+    def test_auto_discovers_cp210x_using_vid_pid(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB4"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            port_infos=[
+                FakePort("/dev/ttyACM0", vid=0x1234, pid=0x5678),
+                FakePort(
+                    "/dev/ttyUSB4",
+                    description="CP2102N USB to UART Bridge Controller",
+                    manufacturer="Silicon Labs",
+                    vid=0x10C4,
+                    pid=0xEA60,
+                ),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB4")
+        self.assertEqual(
+            FakeReader.calls,
+            [
+                ("open", "/dev/ttyUSB4", 57600),
+                ("verify_reader", "/dev/ttyUSB4"),
+                ("close", "/dev/ttyUSB4"),
+            ],
+        )
+
+    def test_ttyusb_number_is_irrelevant_when_vid_pid_matches(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB9"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            port_infos=[
+                FakePort("/dev/ttyUSB9", vid=0x10C4, pid=0xEA60),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB9")
+
+    def test_string_pyserial_usb_ids_are_normalized_before_filtering(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB4"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            port_infos=[
+                FakePort("/dev/ttyUSB4", vid="10c4", pid="EA60"),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB4")
+        self.assertEqual(result.devices[0].vid, 0x10C4)
+        self.assertEqual(result.devices[0].pid, 0xEA60)
+
+    def test_stable_by_id_path_is_preferred_when_available(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tty = root / "ttyUSB4"
+            tty.write_text("")
+            by_id = root / "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller-if00-port0"
+            by_id.symlink_to(tty)
+            FakeReader.verified_ports = {str(by_id)}
+
+            result = discover_reader_port(
+                baudrate=57600,
+                usb_vendor_id=0x10C4,
+                usb_product_id=0xEA60,
+                port_infos=[
+                    FakePort(str(tty), vid=0x10C4, pid=0xEA60),
+                ],
+                by_id_paths=[by_id],
+                reader_factory=FakeReader,
+            )
+
+        self.assertEqual(result.selected_port, str(by_id))
+        self.assertEqual(result.devices[0].stable_path, str(by_id))
+
+    def test_mocked_by_id_path_is_preferred_even_when_tty_target_is_not_real(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tty = Path("/dev/ttyUSB77")
+            by_id = root / "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller-if00-port0"
+            by_id.symlink_to(tty)
+            FakeReader.verified_ports = {str(by_id)}
+
+            result = discover_reader_port(
+                baudrate=57600,
+                usb_vendor_id=0x10C4,
+                usb_product_id=0xEA60,
+                port_infos=[
+                    FakePort(str(tty), vid=0x10C4, pid=0xEA60),
+                ],
+                by_id_paths=[by_id],
+                reader_factory=FakeReader,
+            )
+
+        self.assertEqual(result.selected_port, str(by_id))
+        self.assertEqual(result.devices[0].stable_path, str(by_id))
+
+    def test_absence_of_by_id_still_permits_tty_candidate_verification(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB4"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            port_infos=[
+                FakePort("/dev/ttyUSB4", vid=0x10C4, pid=0xEA60),
+            ],
+            by_id_paths=[],
+            reader_factory=FakeReader,
+        )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB4")
+
+    def test_usb_serial_selects_correct_adapter(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB0", "/dev/ttyUSB1"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            usb_serial="SERIAL-B",
+            port_infos=[
+                FakePort("/dev/ttyUSB0", vid=0x10C4, pid=0xEA60, serial_number="SERIAL-A"),
+                FakePort("/dev/ttyUSB1", vid=0x10C4, pid=0xEA60, serial_number="SERIAL-B"),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertEqual(result.selected_port, "/dev/ttyUSB1")
+        self.assertNotIn(("open", "/dev/ttyUSB0", 57600), FakeReader.calls)
+
+    def test_wrong_usb_serial_does_not_select_another_adapter(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB0"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            usb_serial="MISSING-SERIAL",
+            port_infos=[
+                FakePort("/dev/ttyUSB0", vid=0x10C4, pid=0xEA60, serial_number="SERIAL-A"),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertIsNone(result.selected_port)
+        self.assertEqual(result.devices, [])
+        self.assertIn("USB filters", result.message)
+
+    def test_multiple_cp210x_readers_are_not_selected_ambiguously(self):
+        FakeReader.verified_ports = {"/dev/ttyUSB0", "/dev/ttyUSB1"}
+
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            port_infos=[
+                FakePort("/dev/ttyUSB0", vid=0x10C4, pid=0xEA60, serial_number="SERIAL-A"),
+                FakePort("/dev/ttyUSB1", vid=0x10C4, pid=0xEA60, serial_number="SERIAL-B"),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertIsNone(result.selected_port)
+        self.assertEqual(len(result.supported_readers), 2)
+        self.assertIn("Multiple", result.message)
+
+    def test_matching_usb_adapter_failing_reader_verification_is_rejected(self):
+        result = discover_reader_port(
+            baudrate=57600,
+            usb_vendor_id=0x10C4,
+            usb_product_id=0xEA60,
+            port_infos=[
+                FakePort("/dev/ttyUSB4", vid=0x10C4, pid=0xEA60),
+            ],
+            reader_factory=FakeReader,
+        )
+
+        self.assertIsNone(result.selected_port)
+        self.assertEqual(len(result.devices), 1)
+        self.assertFalse(result.devices[0].reader_verified)
 
     def test_auto_selects_reader_verified_by_work_mode_fallback(self):
         ProtocolSerial.responses_by_port = {
@@ -309,6 +540,24 @@ class SerialDiscoveryTests(unittest.TestCase):
         self.assertEqual(second[0], "COM4")
         self.assertEqual(discover.call_count, 2)
 
+    def test_resolve_auto_passes_normalized_lowercase_hex_usb_filters(self):
+        edge_config = replace(
+            config(serial_port="AUTO"),
+            usb_vendor_id=int("10c4", 16),
+            usb_product_id=int("ea60", 16),
+        )
+
+        with patch("mvd_edge.app.discover_reader_port") as discover:
+            discover.return_value.selected_port = "COM4"
+            discover.return_value.message = "Reader selected"
+            discover.return_value.devices = []
+            discover.return_value.supported_readers = []
+
+            resolve_reader_port(edge_config)
+
+        self.assertEqual(discover.call_args.kwargs["usb_vendor_id"], 0x10C4)
+        self.assertEqual(discover.call_args.kwargs["usb_product_id"], 0xEA60)
+
 
 class ConfigCommissioningTests(unittest.TestCase):
     def test_commissioning_config_loads(self):
@@ -319,6 +568,7 @@ class ConfigCommissioningTests(unittest.TestCase):
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
                     "RFID_INGEST_API_KEY=test-key",
                     "APPLICATION_PROFILE=RFID_ASSET_TRACKING",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
                     "SITE_ID=EXPERIENCE-CENTER",
                     "LOCATION_ID=GATE-1",
                     "ZONE_ID=INBOUND",
@@ -345,6 +595,7 @@ class ConfigCommissioningTests(unittest.TestCase):
                 "\n".join([
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
                     "RFID_INGEST_API_KEY=test-key",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
                     "SITE_ID=EXPERIENCE-CENTER",
                     "LOCATION_ID=GATE-1",
                     "ZONE_ID=INBOUND",
@@ -356,6 +607,52 @@ class ConfigCommissioningTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 EdgeConfig.from_env(env_file=env_file)
+
+    def test_lowercase_hex_usb_config_matches_integer_metadata_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text(
+                "\n".join([
+                    "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=test-key",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
+                    "SITE_ID=EXPERIENCE-CENTER",
+                    "LOCATION_ID=GATE-1",
+                    "ZONE_ID=INBOUND",
+                    "DEVICE_ID=EXP-CENTER-EDGE-01",
+                    "READER_ID=LAB-RFID-01",
+                    "USB_VENDOR_ID=10c4",
+                    "USB_PRODUCT_ID=ea60",
+                ])
+            )
+
+            loaded = EdgeConfig.from_env(env_file=env_file)
+
+        self.assertEqual(loaded.usb_vendor_id, 0x10C4)
+        self.assertEqual(loaded.usb_product_id, 0xEA60)
+
+    def test_uppercase_hex_usb_config_matches_integer_metadata_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text(
+                "\n".join([
+                    "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
+                    "RFID_INGEST_API_KEY=test-key",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
+                    "SITE_ID=EXPERIENCE-CENTER",
+                    "LOCATION_ID=GATE-1",
+                    "ZONE_ID=INBOUND",
+                    "DEVICE_ID=EXP-CENTER-EDGE-01",
+                    "READER_ID=LAB-RFID-01",
+                    "USB_VENDOR_ID=10C4",
+                    "USB_PRODUCT_ID=EA60",
+                ])
+            )
+
+            loaded = EdgeConfig.from_env(env_file=env_file)
+
+        self.assertEqual(loaded.usb_vendor_id, 0x10C4)
+        self.assertEqual(loaded.usb_product_id, 0xEA60)
 
 
 if __name__ == "__main__":

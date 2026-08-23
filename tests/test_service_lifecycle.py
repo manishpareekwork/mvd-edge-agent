@@ -15,6 +15,7 @@ from mvd_edge.transport.cloud import DeliveryResult
 def make_config(directory: Path, **overrides) -> EdgeConfig:
     values = {
         "application_profile": "RFID_ASSET_TRACKING",
+        "customer_id": "MVD-INSIGHTS",
         "site_id": "EXPERIENCE-CENTER",
         "location_id": "GATE-1",
         "zone_id": "INBOUND",
@@ -23,6 +24,9 @@ def make_config(directory: Path, **overrides) -> EdgeConfig:
         "reader_id": "LAB-RFID-01",
         "reader_address": 0x00,
         "reader_verify_method": "AUTO",
+        "usb_vendor_id": None,
+        "usb_product_id": None,
+        "usb_serial": None,
         "serial_port": "AUTO",
         "serial_baud": 57600,
         "rfid_api_url": "https://api.example.test/api/v1/rfid/events",
@@ -287,6 +291,7 @@ class ServiceLifecycleTests(unittest.TestCase):
                 "\n".join([
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
                     "RFID_INGEST_API_KEY=test-key",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
                     "SITE_ID=EXPERIENCE-CENTER",
                     "LOCATION_ID=GATE-1",
                     "ZONE_ID=INBOUND",

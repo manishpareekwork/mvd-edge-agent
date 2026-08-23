@@ -138,7 +138,7 @@ copy_file "$SCRIPT_DIR/systemd/mvd-edge.service" "$SYSTEMD_DIR/mvd-edge.service"
 
 if [ ! -f "$CONFIG_DIR/edge.env" ]; then
   copy_file "$SCRIPT_DIR/config/edge.env.example" "$CONFIG_DIR/edge.env" 0640
-  printf 'Created config template: %s\n' "$CONFIG_DIR/edge.env"
+  printf 'New configuration installed: %s\n' "$CONFIG_DIR/edge.env"
 else
   printf 'Preserved existing config: %s\n' "$CONFIG_DIR/edge.env"
 fi

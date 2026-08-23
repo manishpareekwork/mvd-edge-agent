@@ -110,6 +110,7 @@ def check_config() -> int:
     print("VALID")
     print()
     print("Application:", format_application_profile(config.application_profile))
+    print("Customer:", config.customer_id)
     print("Site:", config.site_id)
     print("Location:", config.location_id)
     print("Zone:", config.zone_id)
@@ -118,6 +119,15 @@ def check_config() -> int:
     print("Reader:", config.reader_id)
     print("Reader Address:", f"0x{config.reader_address:02X}")
     print("Reader Verify Method:", config.reader_verify_method)
+    print(
+        "USB Vendor/Product:",
+        (
+            f"{config.usb_vendor_id:04x}:{config.usb_product_id:04x}"
+            if config.usb_vendor_id is not None and config.usb_product_id is not None
+            else "not configured"
+        ),
+    )
+    print("USB Serial:", config.usb_serial or "not configured")
     print("Serial:", config.serial_port)
     print("Baud:", config.serial_baud)
     print("API URL:", config.rfid_api_url)
@@ -147,12 +157,28 @@ def check_config() -> int:
     return 0
 
 
-def build_event_payload(event: DetectedEvent, reader_id: str) -> dict[str, Any]:
+def build_event_payload(
+    event: DetectedEvent,
+    *,
+    reader_id: str,
+    customer_id: Optional[str] = None,
+    site_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    application_profile: Optional[str] = None,
+    location_id: Optional[str] = None,
+    zone_id: Optional[str] = None,
+) -> dict[str, Any]:
     return {
         "edge_event_id": event.edge_event_id,
         "event": event.event_type,
         "epc": event.epc,
-        "reader_id": reader_id,
+        "reader_id": event.reader_id or reader_id,
+        "customer_id": customer_id,
+        "site_id": site_id,
+        "device_id": device_id,
+        "application_profile": application_profile,
+        "location_id": location_id,
+        "zone_id": zone_id,
         "timestamp": event.edge_event_at,
         "edge_event_at": event.edge_event_at,
         "edge_send_at": timestamp(),
@@ -303,12 +329,17 @@ def resolve_reader_port(config: EdgeConfig) -> tuple[Optional[str], str, Optiona
     if not should_auto_discover(config.serial_port):
         return config.serial_port, "Using configured serial port", None
 
+    print("RFID serial discovery")
     print("Searching for reader...")
     result = discover_reader_port(
         baudrate=config.serial_baud,
         reader_address=config.reader_address,
         reader_verify_method=config.reader_verify_method,
+        usb_vendor_id=config.usb_vendor_id,
+        usb_product_id=config.usb_product_id,
+        usb_serial=config.usb_serial,
     )
+    log_discovery_result(result)
 
     if result.selected_port:
         print("READER DETECTED")
@@ -316,6 +347,29 @@ def resolve_reader_port(config: EdgeConfig) -> tuple[Optional[str], str, Optiona
         return result.selected_port, result.message, result
 
     return None, result.message, result
+
+
+def log_discovery_result(result: DiscoveryResult) -> None:
+    if not result.devices:
+        print("Discovery candidates: none")
+        print("Discovery result:", result.message)
+        return
+
+    for device in result.devices:
+        vid_pid = (
+            f"{device.vid:04x}:{device.pid:04x}"
+            if device.vid is not None and device.pid is not None
+            else "unknown"
+        )
+        print("Discovery candidate:", device.port)
+        print("  VID/PID:", vid_pid)
+        print("  USB serial:", device.serial_number or "unknown")
+        print("  Stable path:", device.stable_path or "not available")
+        print("  Reader verification:", "passed" if device.reader_verified else "failed")
+        if device.error:
+            print("  Verification error:", device.error)
+
+    print("Discovery result:", result.message)
 
 
 def report_reader_unavailable(
@@ -333,6 +387,7 @@ def read_inventory_events(
     reader: IDT85Reader,
     state: PresenceState,
     health_state: Optional[HealthState] = None,
+    reader_id: Optional[str] = None,
 ) -> tuple[ReaderState, list[DetectedEvent], str]:
     started_at = time.time()
 
@@ -370,7 +425,11 @@ def read_inventory_events(
         if result.status != InventoryStatus.VALID:
             return ReaderState.READY, [], result.status.value
 
-        return ReaderState.READY, state.update(result.tags, now=time.time()), ""
+        return (
+            ReaderState.READY,
+            state.update(result.tags, now=time.time(), reader_id=reader_id),
+            "",
+        )
     except Exception as exc:
         reader.close()
         if health_state:
@@ -387,7 +446,13 @@ def build_heartbeat_payload(
     health_state: HealthState,
 ) -> dict[str, object]:
     return health_state.payload(
+        customer_id=config.customer_id,
+        site_id=config.site_id,
+        location_id=config.location_id,
+        zone_id=config.zone_id,
+        application_profile=config.application_profile,
         device_id=config.device_id,
+        device_type=config.device_type,
         reader_id=config.reader_id,
         agent_version=__version__,
         serial_port=config.serial_port,
@@ -458,6 +523,7 @@ def run_agent(
     print("IDT-85 CONTINUOUS RFID COLLECTOR")
     print("================================")
     print("Application:", format_application_profile(config.application_profile))
+    print("Customer:", config.customer_id)
     print("Site:", config.site_id)
     print("Location:", config.location_id)
     print("Zone:", config.zone_id)
@@ -545,6 +611,7 @@ def run_agent(
                     reader=reader,
                     state=state,
                     health_state=health_state,
+                    reader_id=config.reader_id,
                 )
                 health_state.set_reader_state(reader_state.value)
 
@@ -558,7 +625,16 @@ def run_agent(
 
             for event in events:
                 health_state.mark_event()
-                payload = build_event_payload(event, reader_id=config.reader_id)
+                payload = build_event_payload(
+                    event,
+                    reader_id=config.reader_id,
+                    customer_id=config.customer_id,
+                    site_id=config.site_id,
+                    device_id=config.device_id,
+                    application_profile=config.application_profile,
+                    location_id=config.location_id,
+                    zone_id=config.zone_id,
+                )
                 queue.enqueue(payload)
                 print("QUEUED:")
                 print(event.event_type)

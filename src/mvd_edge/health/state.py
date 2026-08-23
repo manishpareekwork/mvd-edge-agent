@@ -117,6 +117,12 @@ class HealthState:
     def payload(
         self,
         *,
+        customer_id: str,
+        site_id: str,
+        location_id: str,
+        zone_id: str,
+        application_profile: str,
+        device_type: str,
         device_id: str,
         reader_id: str,
         agent_version: str,
@@ -124,7 +130,13 @@ class HealthState:
         queue_pending: int,
     ) -> dict[str, object]:
         return {
+            "customer_id": customer_id,
+            "site_id": site_id,
+            "location_id": location_id,
+            "zone_id": zone_id,
+            "application_profile": application_profile,
             "device_id": device_id,
+            "device_type": device_type,
             "reader_id": reader_id,
             "agent_version": agent_version,
             "reader_state": self.reader_state,

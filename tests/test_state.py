@@ -100,6 +100,37 @@ class PresenceStateTests(unittest.TestCase):
         self.assertIn("EPC1", state.visible_tags)
         self.assertNotIn("EPC2", state.visible_tags)
 
+    def test_same_epc_on_two_readers_keeps_independent_state(self) -> None:
+        state = PresenceState(exit_timeout=3.0)
+
+        reader_a_enter = state.update(["EPC1"], now=100.0, reader_id="READER-A")
+        reader_b_enter = state.update(["EPC1"], now=101.0, reader_id="READER-B")
+        reader_a_exit = state.update([], now=103.0, reader_id="READER-A")
+
+        self.assertEqual(len(reader_a_enter), 1)
+        self.assertEqual(reader_a_enter[0].reader_id, "READER-A")
+        self.assertEqual(len(reader_b_enter), 1)
+        self.assertEqual(reader_b_enter[0].reader_id, "READER-B")
+        self.assertEqual(len(reader_a_exit), 1)
+        self.assertEqual(reader_a_exit[0].event_type, "EXIT")
+        self.assertEqual(reader_a_exit[0].reader_id, "READER-A")
+        self.assertNotIn("READER-A\x00EPC1", state.visible_tags)
+        self.assertIn("READER-B\x00EPC1", state.visible_tags)
+
+    def test_multiple_epcs_on_multiple_readers_do_not_overwrite_each_other(self) -> None:
+        state = PresenceState(exit_timeout=3.0)
+
+        state.update(["EPC1", "EPC2"], now=100.0, reader_id="READER-A")
+        state.update(["EPC2", "EPC3"], now=101.0, reader_id="READER-B")
+        events = state.update(["EPC2"], now=103.0, reader_id="READER-A")
+
+        self.assertEqual([(event.event_type, event.epc, event.reader_id) for event in events], [
+            ("EXIT", "EPC1", "READER-A"),
+        ])
+        self.assertIn("READER-A\x00EPC2", state.visible_tags)
+        self.assertIn("READER-B\x00EPC2", state.visible_tags)
+        self.assertIn("READER-B\x00EPC3", state.visible_tags)
+
 
 if __name__ == "__main__":
     unittest.main()

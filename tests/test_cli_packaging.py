@@ -17,6 +17,7 @@ def write_config(path: Path, **overrides) -> None:
     values = {
         "RFID_API_URL": "https://api.example.test/api/v1/rfid/events",
         "RFID_INGEST_API_KEY": "super-secret-test-key",
+        "CUSTOMER_ID": "MVD-INSIGHTS",
         "SITE_ID": "EXPERIENCE-CENTER",
         "LOCATION_ID": "GATE-1",
         "ZONE_ID": "INBOUND",
@@ -74,6 +75,8 @@ class CliPackagingTests(unittest.TestCase):
         self.assertIn("API Key: configured", output)
         self.assertIn("Reader Address: 0x00", output)
         self.assertIn("Reader Verify Method: AUTO", output)
+        self.assertIn("USB Vendor/Product: not configured", output)
+        self.assertIn("USB Serial: not configured", output)
         self.assertIn("Reader Discovery Interval: 5s", output)
         self.assertIn("Queue Batch Size: 20", output)
         self.assertNotIn("super-secret-test-key", output)
@@ -113,6 +116,8 @@ class CliPackagingTests(unittest.TestCase):
             "READER_ADDRESS": "0x100",
             "READER_VERIFY_METHOD": "INVENTORY",
             "READER_DISCOVERY_INTERVAL": "0",
+            "USB_VENDOR_ID": "not-hex",
+            "USB_PRODUCT_ID": "10000",
         }
 
         for name, value in invalid_values.items():
@@ -127,6 +132,39 @@ class CliPackagingTests(unittest.TestCase):
 
                 self.assertEqual(code, 1)
                 self.assertIn(name, output)
+
+    def test_check_config_accepts_auto_with_usb_vid_pid_and_serial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "edge.env"
+            write_config(
+                config_path,
+                SERIAL_PORT="AUTO",
+                USB_VENDOR_ID="10c4",
+                USB_PRODUCT_ID="ea60",
+                USB_SERIAL="field-adapter-serial",
+            )
+
+            code, output = self.run_cli(
+                ["--check-config"],
+                {"MVD_EDGE_CONFIG": str(config_path)},
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("USB Vendor/Product: 10c4:ea60", output)
+        self.assertIn("USB Serial: field-adapter-serial", output)
+
+    def test_check_config_rejects_partial_usb_vid_pid_filter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "edge.env"
+            write_config(config_path, USB_VENDOR_ID="10c4", USB_PRODUCT_ID="")
+
+            code, output = self.run_cli(
+                ["--check-config"],
+                {"MVD_EDGE_CONFIG": str(config_path)},
+            )
+
+        self.assertEqual(code, 1)
+        self.assertIn("USB_VENDOR_ID and USB_PRODUCT_ID", output)
 
     def test_mvd_edge_config_path_is_respected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -181,6 +219,7 @@ class CliPackagingTests(unittest.TestCase):
                 "\n".join([
                     "RFID_API_URL=https://api.example.test/api/v1/rfid/events",
                     "RFID_INGEST_API_KEY=super-secret-test-key",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
                     "SITE_ID=EXPERIENCE-CENTER",
                     "LOCATION_ID=GATE-1",
                     "ZONE_ID=INBOUND",

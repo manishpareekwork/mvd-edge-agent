@@ -95,6 +95,7 @@ class InstallerFoundationTests(unittest.TestCase):
             config.write_text(
                 "DEVICE_ID=CUSTOMER-DEVICE\n"
                 "READER_ID=CUSTOMER-READER\n"
+                "CUSTOMER_ID=CUSTOMER-01\n"
                 "SITE_ID=CUSTOMER-SITE\n"
                 "LOCATION_ID=CUSTOMER-LOCATION\n"
                 "ZONE_ID=CUSTOMER-ZONE\n"
@@ -109,6 +110,7 @@ class InstallerFoundationTests(unittest.TestCase):
             second = self.run_script(ROOT / "packaging/linux/install.sh", env)
 
             self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertIn("Preserved existing config", second.stdout)
             self.assertIn("CUSTOMER-DEVICE", config.read_text())
             self.assertEqual(data_marker.read_text(), "customer runtime data")
             self.assertFalse(stale_runtime_file.exists())
@@ -165,6 +167,7 @@ class InstallerFoundationTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("New configuration installed", result.stdout)
             config_text = (destdir / "etc/mvd-edge/edge.env").read_text()
             self.assertIn("RFID_API_URL=", config_text)
             self.assertIn("RFID_INGEST_API_KEY=", config_text)
@@ -185,6 +188,7 @@ class InstallerFoundationTests(unittest.TestCase):
             )
             config.write_text(
                 "SERIAL_PORT=/run/iotdin-imx8p/gateway/access/industrial_io/ttyRS485\n"
+                "CUSTOMER_ID=CUSTOMER-01\n"
                 "DEVICE_ID=EDGE-01\n"
                 "READER_ID=READER-01\n"
                 "SITE_ID=SITE-01\n"

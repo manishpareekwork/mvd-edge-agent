@@ -62,6 +62,7 @@ class HealthTests(unittest.TestCase):
                 "\n".join([
                     "DEVICE_ID=EXP-CENTER-EDGE-99",
                     "READER_ID=LAB-RFID-01",
+                    "CUSTOMER_ID=MVD-INSIGHTS",
                     "SITE_ID=EXPERIENCE-CENTER",
                     "LOCATION_ID=GATE-1",
                     "ZONE_ID=INBOUND",
@@ -82,6 +83,7 @@ class HealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = EdgeConfig(
                 application_profile="RFID_ASSET_TRACKING",
+                customer_id="MVD-INSIGHTS",
                 site_id="EXPERIENCE-CENTER",
                 location_id="GATE-1",
                 zone_id="INBOUND",
@@ -90,6 +92,9 @@ class HealthTests(unittest.TestCase):
                 reader_id="LAB-RFID-01",
                 reader_address=0x00,
                 reader_verify_method="AUTO",
+                usb_vendor_id=None,
+                usb_product_id=None,
+                usb_serial=None,
                 serial_port="/dev/test-reader",
                 serial_baud=57600,
                 rfid_api_url="https://api.example.test/api/v1/rfid/events",
@@ -117,6 +122,9 @@ class HealthTests(unittest.TestCase):
             )
 
             self.assertEqual(payload["device_id"], "EXP-CENTER-EDGE-01")
+            self.assertEqual(payload["customer_id"], "MVD-INSIGHTS")
+            self.assertEqual(payload["site_id"], "EXPERIENCE-CENTER")
+            self.assertEqual(payload["reader_id"], "LAB-RFID-01")
             self.assertEqual(payload["reader_state"], "DISCONNECTED")
             self.assertEqual(payload["queue_pending"], 0)
             self.assertEqual(payload["health_status"], "OFFLINE")
@@ -137,6 +145,22 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(reader_state, ReaderState.READY)
         self.assertEqual(len(events), 1)
         self.assertIsNotNone(health.last_reader_activity_at)
+
+    def test_inventory_events_preserve_reader_identity(self) -> None:
+        health = HealthState()
+        state = PresenceState(exit_timeout=3.0)
+        reader = FakeReader(["EPC1"])
+
+        reader_state, events, _ = read_inventory_events(
+            reader,
+            state,
+            health,
+            reader_id="READER-01",
+        )
+
+        self.assertEqual(reader_state, ReaderState.READY)
+        self.assertEqual(events[0].reader_id, "READER-01")
+        self.assertIn("READER-01\x00EPC1", state.visible_tags)
 
     def test_valid_tag_response_marks_reader_healthy(self) -> None:
         health = HealthState()
@@ -323,6 +347,7 @@ class HealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = EdgeConfig(
                 application_profile="RFID_ASSET_TRACKING",
+                customer_id="MVD-INSIGHTS",
                 site_id="EXPERIENCE-CENTER",
                 location_id="GATE-1",
                 zone_id="INBOUND",
@@ -331,6 +356,9 @@ class HealthTests(unittest.TestCase):
                 reader_id="LAB-RFID-01",
                 reader_address=0x00,
                 reader_verify_method="AUTO",
+                usb_vendor_id=None,
+                usb_product_id=None,
+                usb_serial=None,
                 serial_port="/dev/test-reader",
                 serial_baud=57600,
                 rfid_api_url="https://api.example.test/api/v1/rfid/events",

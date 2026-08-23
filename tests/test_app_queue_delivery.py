@@ -71,6 +71,27 @@ class AppQueueDeliveryTests(unittest.TestCase):
             )
             queue.close()
 
+    def test_event_payload_preserves_configured_identity_fields(self) -> None:
+        state = PresenceState(exit_timeout=3.0)
+        event = state.update(["EPC1"], now=100.0, reader_id="READER-01")[0]
+
+        payload = build_event_payload(
+            event,
+            reader_id="FALLBACK-READER",
+            customer_id="ABC-RAILWAYS",
+            site_id="LC-GATE-014",
+            device_id="EDGE-014",
+            application_profile="RAILWAY_LEVEL_CROSSING",
+            location_id="LEVEL-CROSSING",
+            zone_id="TRACK-APPROACH",
+        )
+
+        self.assertEqual(payload["customer_id"], "ABC-RAILWAYS")
+        self.assertEqual(payload["site_id"], "LC-GATE-014")
+        self.assertEqual(payload["device_id"], "EDGE-014")
+        self.assertEqual(payload["reader_id"], "READER-01")
+        self.assertEqual(payload["epc"], "EPC1")
+
     def test_already_stored_result_marks_delivered(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch("builtins.print"):
             state = PresenceState(exit_timeout=3.0)

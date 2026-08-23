@@ -101,6 +101,30 @@ def parse_reader_address(name: str, value: Optional[str]) -> int:
     return parsed
 
 
+def optional_usb_id(name: str, value: Optional[str]) -> Optional[int]:
+    if not value or not value.strip():
+        return None
+
+    raw = value.strip()
+
+    try:
+        parsed = int(raw, 16)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a hexadecimal USB ID such as 10c4") from exc
+
+    if parsed < 0 or parsed > 0xFFFF:
+        raise ValueError(f"{name} must be between 0000 and ffff")
+
+    return parsed
+
+
+def optional_string(value: Optional[str]) -> Optional[str]:
+    if value is None or not value.strip():
+        return None
+
+    return value.strip()
+
+
 def parse_verify_method(name: str, value: Optional[str]) -> str:
     parsed = required_string(name, value).upper()
 
@@ -138,6 +162,7 @@ def discover_config_file(env_file: Optional[Path] = None) -> Path:
 @dataclass(frozen=True)
 class EdgeConfig:
     application_profile: str
+    customer_id: str
     site_id: str
     location_id: str
     zone_id: str
@@ -146,6 +171,9 @@ class EdgeConfig:
     reader_id: str
     reader_address: int
     reader_verify_method: str
+    usb_vendor_id: Optional[int]
+    usb_product_id: Optional[int]
+    usb_serial: Optional[str]
     serial_port: str
     serial_baud: int
     rfid_api_url: str
@@ -192,6 +220,11 @@ class EdgeConfig:
             minimum=0,
             exclusive_minimum=True,
         )
+        usb_vendor_id = optional_usb_id("USB_VENDOR_ID", get_env("USB_VENDOR_ID"))
+        usb_product_id = optional_usb_id("USB_PRODUCT_ID", get_env("USB_PRODUCT_ID"))
+
+        if (usb_vendor_id is None) != (usb_product_id is None):
+            raise ValueError("USB_VENDOR_ID and USB_PRODUCT_ID must be configured together")
 
         return cls(
             application_profile=required_string(
@@ -201,6 +234,7 @@ class EdgeConfig:
                     "RFID_ASSET_TRACKING",
                 ),
             ),
+            customer_id=required_string("CUSTOMER_ID", get_env("CUSTOMER_ID")),
             site_id=required_string("SITE_ID", get_env("SITE_ID")),
             location_id=required_string("LOCATION_ID", get_env("LOCATION_ID")),
             zone_id=required_string("ZONE_ID", get_env("ZONE_ID")),
@@ -218,6 +252,9 @@ class EdgeConfig:
                 "READER_VERIFY_METHOD",
                 get_env("READER_VERIFY_METHOD", "AUTO"),
             ),
+            usb_vendor_id=usb_vendor_id,
+            usb_product_id=usb_product_id,
+            usb_serial=optional_string(get_env("USB_SERIAL")),
             serial_port=required_string(
                 "SERIAL_PORT",
                 get_env("SERIAL_PORT", "AUTO"),

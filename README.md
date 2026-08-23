@@ -77,11 +77,19 @@ SERIAL_RECONNECT_INTERVAL=5
 AUTO_CONFIGURE_READER=false
 HEARTBEAT_INTERVAL=30
 APPLICATION_PROFILE=RFID_ASSET_TRACKING
+CUSTOMER_ID=
 SITE_ID=
 LOCATION_ID=
 ZONE_ID=
 DEVICE_ID=
 READER_ID=
+READER_ADDRESS=0x00
+READER_VERIFY_METHOD=AUTO
+USB_VENDOR_ID=
+USB_PRODUCT_ID=
+USB_SERIAL=
+SERIAL_PORT=AUTO
+SERIAL_BAUD=57600
 TARGET_READ_DISTANCE_M=
 ```
 
@@ -181,16 +189,24 @@ older than about 2-3 heartbeat intervals.
 ## Automatic Reader Discovery
 
 Set `SERIAL_PORT=AUTO` to let the agent scan serial interfaces using pyserial
-port enumeration. Each candidate is opened at `SERIAL_BAUD` and probed only
-with the safe Get Reader Information command. Discovery does not inventory
-tags, change Answer Mode, or send RF tuning commands.
+port enumeration. `USB_VENDOR_ID` and `USB_PRODUCT_ID` can restrict discovery
+to a known USB adapter family, for example `10c4` and `ea60` for a CP2102N
+adapter. `USB_SERIAL` is optional and, when set, must match the adapter serial
+number. Leave `USB_SERIAL` blank in reusable installer defaults.
+
+When a matching `/dev/serial/by-id/...` symlink is available, AUTO discovery
+prefers that stable path over changing `/dev/ttyUSB*` names. Each candidate is
+opened at `SERIAL_BAUD` and probed only with the safe Get Reader Information
+command. Discovery does not inventory tags, change Answer Mode, or send RF
+tuning commands.
 
 If exactly one compatible reader responds, the agent selects that port. If no
 reader responds, the agent stays alive and retries discovery on the normal
 serial reconnect interval. If multiple readers respond, the agent refuses to
 choose one automatically and reports that `SERIAL_PORT` must be configured
-explicitly. In AUTO mode, reconnect attempts rerun discovery, so a reader that
-reenumerates from `/dev/ttyUSB0` to `/dev/ttyUSB1` can recover automatically.
+explicitly or narrowed with `USB_SERIAL`. In AUTO mode, reconnect attempts rerun
+discovery, so a reader that reenumerates from one `/dev/ttyUSB*` number to
+another can recover automatically.
 
 For diagnostics, run:
 
@@ -206,15 +222,17 @@ available, and whether each port returned an IDT-85 compatible response.
 Commissioning identity is local configuration:
 
 - `APPLICATION_PROFILE`
+- `CUSTOMER_ID`
 - `SITE_ID`
 - `LOCATION_ID`
 - `ZONE_ID`
 - `DEVICE_ID`
 - `READER_ID`
 
-`DEVICE_ID` identifies the edge machine or controller. `READER_ID` identifies
-the current logical RFID reader. Future deployments may attach multiple inputs
-to one device, but the current runtime remains single-reader.
+`CUSTOMER_ID` and `SITE_ID` identify the deployment owner and site. `DEVICE_ID`
+identifies the edge machine or controller. `READER_ID` identifies the current
+logical RFID reader. EPC-to-asset/customer/site naming remains a cloud/database
+mapping responsibility, not edge-agent configuration.
 
 ## RFID Read Zone
 
