@@ -7,6 +7,7 @@ import serial
 
 
 INVENTORY_COMMAND = 0x01
+INVENTORY_NO_TAG_STATUS = 0xFB
 GET_READER_INFO_COMMAND = 0x21
 GET_WORK_MODE_COMMAND = 0x36
 SET_WORK_MODE_COMMAND = 0x35
@@ -149,23 +150,36 @@ def parse_inventory_response(response: bytes) -> list[str]:
     return tags
 
 
+def has_valid_crc(response: bytes) -> bool:
+    if len(response) < 3:
+        return False
+
+    expected = crc16(response[:-2])
+    actual = response[-2] | (response[-1] << 8)
+    return expected == actual
+
+
+def is_no_tag_inventory_response(response: bytes) -> bool:
+    # Observed IDT-85 answer-mode no-tag inventory response:
+    #   05 00 01 FB F2 3D
+    # The length byte says five bytes follow, command 0x01 is inventory,
+    # status/result 0xFB means no tags are currently in range, and the final
+    # two bytes are the CRC16 over 05 00 01 FB.
+    return (
+        len(response) == 6
+        and response[0] == 0x05
+        and response[2] == INVENTORY_COMMAND
+        and response[3] == INVENTORY_NO_TAG_STATUS
+        and has_valid_crc(response)
+    )
+
+
 def classify_inventory_response(response: bytes) -> InventoryResult:
     if not response:
         return InventoryResult(status=InventoryStatus.NO_RESPONSE, tags=[])
 
     expected_length = response[0] + 1
     if response[0] and len(response) != expected_length:
-        # Some IDT-85 firmware returns a short success frame for an empty
-        # inventory cycle. Treat that as a valid no-tag response so idle track
-        # conditions do not inflate malformed-response health counters.
-        if (
-            len(response) >= 5
-            and response[2] == INVENTORY_COMMAND
-            and response[3] in (0x01, 0x02, 0x03, 0x04)
-            and response[4] == 0
-        ):
-            return InventoryResult(status=InventoryStatus.VALID, tags=[])
-
         return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
 
     if len(response) < 6:
@@ -173,6 +187,9 @@ def classify_inventory_response(response: bytes) -> InventoryResult:
 
     if response[2] != INVENTORY_COMMAND:
         return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
+
+    if is_no_tag_inventory_response(response):
+        return InventoryResult(status=InventoryStatus.VALID, tags=[])
 
     status = response[3]
 

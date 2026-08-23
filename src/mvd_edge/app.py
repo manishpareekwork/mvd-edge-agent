@@ -20,6 +20,7 @@ from mvd_edge.adapters.idt85 import (
 from mvd_edge.config import EdgeConfig
 from mvd_edge.discovery.serial import DiscoveryResult, discover_reader_port
 from mvd_edge.event_engine.state import DetectedEvent, PresenceState
+from mvd_edge.health.network import collect_network_telemetry
 from mvd_edge.health.state import HealthState
 from mvd_edge.storage.queue import EventQueue
 from mvd_edge.transport.cloud import CloudTransport, DeliveryResult
@@ -445,7 +446,7 @@ def build_heartbeat_payload(
     queue: EventQueue,
     health_state: HealthState,
 ) -> dict[str, object]:
-    return health_state.payload(
+    payload = health_state.payload(
         customer_id=config.customer_id,
         site_id=config.site_id,
         location_id=config.location_id,
@@ -458,6 +459,13 @@ def build_heartbeat_payload(
         serial_port=config.serial_port,
         queue_pending=queue.pending_count(),
     )
+
+    try:
+        payload.update(collect_network_telemetry().payload())
+    except Exception:
+        pass
+
+    return payload
 
 
 def send_heartbeat(

@@ -21,6 +21,9 @@ from mvd_edge.adapters.idt85 import (
 )
 
 
+REAL_NO_TAG_INVENTORY_FRAME = bytes.fromhex("05 00 01 FB F2 3D")
+
+
 class ScriptedSerial:
     responses_by_port = {}
     writes_by_port = {}
@@ -176,10 +179,16 @@ class IDT85ParserTests(unittest.TestCase):
         self.assertEqual(result.status, InventoryStatus.VALID)
         self.assertEqual(result.tags, [])
 
-    def test_classifies_short_success_zero_tag_frame_as_valid(self) -> None:
-        result = classify_inventory_response(bytes([0x05, 0x00, 0x01, 0x01, 0x00]))
+    def test_classifies_real_hardware_no_tag_frame_as_valid(self) -> None:
+        result = classify_inventory_response(REAL_NO_TAG_INVENTORY_FRAME)
 
         self.assertEqual(result.status, InventoryStatus.VALID)
+        self.assertEqual(result.tags, [])
+
+    def test_classifies_no_tag_frame_with_bad_crc_as_malformed(self) -> None:
+        result = classify_inventory_response(bytes.fromhex("05 00 01 FB 00 00"))
+
+        self.assertEqual(result.status, InventoryStatus.MALFORMED)
         self.assertEqual(result.tags, [])
 
     def test_classifies_valid_tagged_frame(self) -> None:
@@ -312,6 +321,21 @@ class IDT85VerificationTests(unittest.TestCase):
     def test_inventory_returns_classified_result(self) -> None:
         port = "/dev/test-reader"
         ScriptedSerial.responses_by_port = {port: [inventory_frame()]}
+        reader = IDT85Reader(port=port, baudrate=57600, read_delay=0)
+
+        with patch("mvd_edge.adapters.idt85.serial.Serial", ScriptedSerial):
+            reader.open()
+            try:
+                result = reader.inventory()
+            finally:
+                reader.close()
+
+        self.assertEqual(result.status, InventoryStatus.VALID)
+        self.assertEqual(result.tags, [])
+
+    def test_inventory_returns_valid_for_real_hardware_no_tag_frame(self) -> None:
+        port = "/dev/test-reader"
+        ScriptedSerial.responses_by_port = {port: [REAL_NO_TAG_INVENTORY_FRAME]}
         reader = IDT85Reader(port=port, baudrate=57600, read_delay=0)
 
         with patch("mvd_edge.adapters.idt85.serial.Serial", ScriptedSerial):

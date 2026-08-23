@@ -9,7 +9,11 @@ from mvd_edge.app import (
     read_inventory_events,
     send_heartbeat,
 )
-from mvd_edge.adapters.idt85 import InventoryResult, InventoryStatus
+from mvd_edge.adapters.idt85 import (
+    InventoryResult,
+    InventoryStatus,
+    classify_inventory_response,
+)
 from mvd_edge.config import EdgeConfig
 from mvd_edge.event_engine.state import PresenceState
 from mvd_edge.health.state import HealthState, ReaderHealthStatus
@@ -52,6 +56,9 @@ class ClassifiedFakeReader:
 
     def close(self):
         self.close_count += 1
+
+
+REAL_NO_TAG_INVENTORY_FRAME = bytes.fromhex("05 00 01 FB F2 3D")
 
 
 class HealthTests(unittest.TestCase):
@@ -196,6 +203,62 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(health.health_status, ReaderHealthStatus.HEALTHY.value)
         self.assertTrue(health.inventory_responding)
         self.assertIsNone(health.last_tag_seen_at)
+
+    def test_real_no_tag_frame_marks_inventory_responding_without_malformed(self) -> None:
+        health = HealthState()
+        state = PresenceState(exit_timeout=3.0)
+        reader = ClassifiedFakeReader([
+            classify_inventory_response(REAL_NO_TAG_INVENTORY_FRAME)
+        ])
+
+        with patch("time.time", return_value=101.0):
+            reader_state, events, message = read_inventory_events(reader, state, health)
+
+        self.assertEqual(reader_state, ReaderState.READY)
+        self.assertEqual(events, [])
+        self.assertEqual(message, "")
+        self.assertEqual(health.health_status, ReaderHealthStatus.HEALTHY.value)
+        self.assertTrue(health.inventory_responding)
+        self.assertTrue(health.reader_connected)
+        self.assertIsNotNone(health.last_successful_inventory_at)
+        self.assertEqual(health.malformed_response_count, 0)
+        self.assertEqual(health.consecutive_no_response_count, 0)
+
+    def test_repeated_real_no_tag_frames_generate_exit_without_degraded_health(self) -> None:
+        health = HealthState()
+        state = PresenceState(exit_timeout=3.0)
+        reader = ClassifiedFakeReader([
+            InventoryResult(InventoryStatus.VALID, ["EPC1"]),
+            classify_inventory_response(REAL_NO_TAG_INVENTORY_FRAME),
+            classify_inventory_response(REAL_NO_TAG_INVENTORY_FRAME),
+        ])
+
+        with patch(
+            "time.time",
+            side_effect=[
+                100.0,
+                100.0,
+                100.0,
+                101.0,
+                101.0,
+                101.0,
+                104.0,
+                104.0,
+                104.0,
+            ],
+        ):
+            enter_events = read_inventory_events(reader, state, health)[1]
+            no_tag_events = read_inventory_events(reader, state, health)[1]
+            exit_events = read_inventory_events(reader, state, health)[1]
+
+        self.assertEqual(enter_events[0].event_type, "ENTER")
+        self.assertEqual(no_tag_events, [])
+        self.assertEqual(len(exit_events), 1)
+        self.assertEqual(exit_events[0].event_type, "EXIT")
+        self.assertEqual(health.health_status, ReaderHealthStatus.HEALTHY.value)
+        self.assertTrue(health.inventory_responding)
+        self.assertEqual(health.malformed_response_count, 0)
+        self.assertEqual(health.consecutive_no_response_count, 0)
 
     def test_no_response_does_not_advance_presence_and_marks_degraded(self) -> None:
         health = HealthState()
