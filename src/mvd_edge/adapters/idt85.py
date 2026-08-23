@@ -155,6 +155,17 @@ def classify_inventory_response(response: bytes) -> InventoryResult:
 
     expected_length = response[0] + 1
     if response[0] and len(response) != expected_length:
+        # Some IDT-85 firmware returns a short success frame for an empty
+        # inventory cycle. Treat that as a valid no-tag response so idle track
+        # conditions do not inflate malformed-response health counters.
+        if (
+            len(response) >= 5
+            and response[2] == INVENTORY_COMMAND
+            and response[3] in (0x01, 0x02, 0x03, 0x04)
+            and response[4] == 0
+        ):
+            return InventoryResult(status=InventoryStatus.VALID, tags=[])
+
         return InventoryResult(status=InventoryStatus.MALFORMED, tags=[])
 
     if len(response) < 6:

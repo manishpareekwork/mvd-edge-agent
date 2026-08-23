@@ -176,6 +176,12 @@ class IDT85ParserTests(unittest.TestCase):
         self.assertEqual(result.status, InventoryStatus.VALID)
         self.assertEqual(result.tags, [])
 
+    def test_classifies_short_success_zero_tag_frame_as_valid(self) -> None:
+        result = classify_inventory_response(bytes([0x05, 0x00, 0x01, 0x01, 0x00]))
+
+        self.assertEqual(result.status, InventoryStatus.VALID)
+        self.assertEqual(result.tags, [])
+
     def test_classifies_valid_tagged_frame(self) -> None:
         result = classify_inventory_response(
             inventory_frame(["E28069150000503242419E26"])
