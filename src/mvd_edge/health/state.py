@@ -38,6 +38,7 @@ class HealthState:
     last_reader_error: Optional[str] = None
     health_status: str = ReaderHealthStatus.OFFLINE.value
     offline_failure_threshold: int = 3
+    last_inventory_epcs: Optional[list[str]] = None
 
     def set_reader_state(self, reader_state: str) -> None:
         self.reader_state = reader_state
@@ -68,6 +69,7 @@ class HealthState:
         self.inventory_responding = True
         self.last_reader_activity_at = now
         self.last_successful_inventory_at = now
+        self.last_inventory_epcs = list(tags)
         self.consecutive_no_response_count = 0
         self.last_reader_error = None
         self.health_status = ReaderHealthStatus.HEALTHY.value
@@ -151,6 +153,7 @@ class HealthState:
             "reader_connected": self.reader_connected,
             "inventory_responding": self.inventory_responding,
             "last_successful_inventory_at": self.last_successful_inventory_at,
+            "last_inventory_epcs": self.last_inventory_epcs,
             "last_tag_seen_at": self.last_tag_seen_at,
             "last_epc_seen": self.last_epc_seen,
             "consecutive_no_response_count": self.consecutive_no_response_count,
