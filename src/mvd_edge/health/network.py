@@ -95,15 +95,22 @@ def parse_nmcli_devices(output: str) -> list[dict[str, str]]:
 
 
 def parse_wifi_available(output: Optional[str]) -> Optional[bool]:
-    if output is None:
+    if output is None or not output.strip():
         return None
 
-    for line in output.splitlines():
-        parts = line.split(":")
-        if "WIFI-HW" in parts:
-            index = parts.index("WIFI-HW")
-            if index + 1 < len(parts):
-                return parts[index + 1].strip().lower() != "missing"
+    first_line = output.splitlines()[0].strip()
+    parts = first_line.split(":")
+
+    if len(parts) != 4:
+        return None
+
+    wifi_hw = parts[0].strip().lower()
+
+    if wifi_hw == "missing":
+        return False
+
+    if wifi_hw in ("enabled", "disabled"):
+        return True
 
     return None
 

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from mvd_edge.health.network import collect_network_telemetry
+from mvd_edge.health.network import collect_network_telemetry, parse_wifi_available
 
 
 class NetworkTelemetryTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class NetworkTelemetryTests(unittest.TestCase):
         telemetry = collect_network_telemetry(self.runner_for(
             route="default via 10.0.0.1 dev eth1 proto dhcp\n",
             devices="eth1:ethernet:connected:Wired connection 2\n",
-            radio="WIFI-HW:missing:WIFI:enabled:WWAN-HW:enabled:WWAN:enabled\n",
+            radio="missing:enabled:enabled:enabled\n",
             ips={"eth1": "10.0.0.20"},
         ))
 
@@ -55,7 +55,7 @@ class NetworkTelemetryTests(unittest.TestCase):
         telemetry = collect_network_telemetry(self.runner_for(
             route="default via 100.64.0.1 dev cdc-wdm0 proto dhcp\n",
             devices="cdc-wdm0:gsm:connected:Jio-LTE\n",
-            radio="WIFI-HW:missing:WIFI:enabled:WWAN-HW:enabled:WWAN:enabled\n",
+            radio="missing:enabled:enabled:enabled\n",
         ))
 
         self.assertEqual(telemetry.primary_network_type, "LTE")
@@ -69,7 +69,7 @@ class NetworkTelemetryTests(unittest.TestCase):
                 "eth1:ethernet:connected:Wired connection 2\n"
                 "cdc-wdm0:gsm:connected:Jio-LTE\n"
             ),
-            radio="WIFI-HW:missing:WIFI:enabled:WWAN-HW:enabled:WWAN:enabled\n",
+            radio="missing:enabled:enabled:enabled\n",
         ))
 
         self.assertEqual(telemetry.primary_network_type, "ETHERNET")
@@ -83,7 +83,7 @@ class NetworkTelemetryTests(unittest.TestCase):
                 "eth1:ethernet:connected:Wired connection 2\n"
                 "cdc-wdm0:gsm:connected:Jio-LTE\n"
             ),
-            radio="WIFI-HW:missing:WIFI:enabled:WWAN-HW:enabled:WWAN:enabled\n",
+            radio="missing:enabled:enabled:enabled\n",
         ))
 
         self.assertEqual(telemetry.primary_network_type, "LTE")
@@ -93,7 +93,7 @@ class NetworkTelemetryTests(unittest.TestCase):
     def test_wifi_hardware_missing(self):
         telemetry = collect_network_telemetry(self.runner_for(
             devices="eth1:ethernet:connected:Wired connection 2\n",
-            radio="WIFI-HW:missing:WIFI:enabled:WWAN-HW:enabled:WWAN:enabled\n",
+            radio="missing:enabled:enabled:enabled\n",
         ))
 
         self.assertFalse(telemetry.wifi_available)
@@ -103,7 +103,7 @@ class NetworkTelemetryTests(unittest.TestCase):
         telemetry = collect_network_telemetry(self.runner_for(
             route="default via 192.168.1.1 dev wlan0 proto dhcp\n",
             devices="wlan0:wifi:connected:Depot-WiFi\n",
-            radio="WIFI-HW:enabled:WIFI:enabled:WWAN-HW:enabled:WWAN:enabled\n",
+            radio="enabled:enabled:enabled:enabled\n",
             ips={"wlan0": "192.168.1.40"},
         ))
 
@@ -119,6 +119,21 @@ class NetworkTelemetryTests(unittest.TestCase):
 
         self.assertIsNone(telemetry.network_connected)
         self.assertEqual(telemetry.default_route_interface, "eth1")
+
+    def test_parse_wifi_available_missing_hw(self):
+        self.assertFalse(parse_wifi_available("missing:enabled:enabled:enabled\n"))
+
+    def test_parse_wifi_available_enabled_hw(self):
+        self.assertTrue(parse_wifi_available("enabled:enabled:enabled:enabled\n"))
+
+    def test_parse_wifi_available_disabled_hw(self):
+        self.assertTrue(parse_wifi_available("disabled:disabled:enabled:enabled\n"))
+
+    def test_parse_wifi_available_empty_output(self):
+        self.assertIsNone(parse_wifi_available(""))
+
+    def test_parse_wifi_available_malformed_output(self):
+        self.assertIsNone(parse_wifi_available("missing:enabled\n"))
 
     def test_subprocess_timeout_falls_back_to_unknown(self):
         def timeout_runner(_command, **_kwargs):
